@@ -147,7 +147,10 @@ describe('Integration: useForm without Field components', () => {
           data-testid="age"
           type="number"
           value={form.values.age}
-          onChange={(e) => form.setFieldValue('age', Number(e.target.value))}
+          onChange={(event) => {
+            const nextAge = event.currentTarget.valueAsNumber
+            form.setFieldValue('age', Number.isNaN(nextAge) ? 0 : nextAge)
+          }}
           onBlur={() => form.setFieldTouched('age', true)}
         />
         {form.touched.age && form.errors.age && (

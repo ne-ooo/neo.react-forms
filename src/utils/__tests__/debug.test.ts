@@ -13,6 +13,7 @@ import {
   createFormId,
   createTimer,
 } from '../debug.js'
+import { REDACTED_VALUE } from '../devtools.js'
 
 describe('configureDebug', () => {
   it('should configure debug mode', () => {
@@ -63,10 +64,45 @@ describe('debug logging functions', () => {
     debugValueChange('form-1', 'email', '', 'test@example.com')
 
     expect(logger).toHaveBeenCalled()
-    expect(logger.mock.calls[0][0]).toContain('form-1.email changed')
+    expect(logger.mock.calls[0]?.[0]).toContain('form-1.email changed')
 
     // Reset
     configureDebug({ enabled: false })
+  })
+
+  it('redacts sensitive value changes by default', () => {
+    const logger = vi.fn()
+    configureDebug({ enabled: true, logger, logValueChanges: true })
+
+    debugValueChange('form-1', 'password', 'old-secret', 'new-secret')
+
+    expect(logger.mock.calls[0]?.[1]).toEqual({
+      field: 'password',
+      oldValue: REDACTED_VALUE,
+      newValue: REDACTED_VALUE,
+    })
+
+    configureDebug({ enabled: false })
+  })
+
+  it('allows sensitive value logging only after an explicit opt-in', () => {
+    const logger = vi.fn()
+    configureDebug({
+      enabled: true,
+      logger,
+      logValueChanges: true,
+      includeSensitiveValues: true,
+    })
+
+    debugValueChange('form-1', 'password', 'old-secret', 'new-secret')
+
+    expect(logger.mock.calls[0]?.[1]).toEqual({
+      field: 'password',
+      oldValue: 'old-secret',
+      newValue: 'new-secret',
+    })
+
+    configureDebug({ enabled: false, includeSensitiveValues: false })
   })
 
   it('should call custom logger for validation', () => {
@@ -80,7 +116,7 @@ describe('debug logging functions', () => {
     })
 
     expect(logger).toHaveBeenCalled()
-    expect(logger.mock.calls[0][0]).toMatch(/✗.*email/)
+    expect(logger.mock.calls[0]?.[0]).toMatch(/✗.*email/)
 
     // Reset
     configureDebug({ enabled: false })
@@ -93,7 +129,7 @@ describe('debug logging functions', () => {
     debugSubmission('form-1', { success: true, duration: 100 })
 
     expect(logger).toHaveBeenCalled()
-    expect(logger.mock.calls[0][0]).toMatch(/✓.*submitted/)
+    expect(logger.mock.calls[0]?.[0]).toMatch(/✓.*submitted/)
 
     // Reset
     configureDebug({ enabled: false })
@@ -106,7 +142,7 @@ describe('debug logging functions', () => {
     debugFormCreated('form-1', { email: '', password: '' })
 
     expect(logger).toHaveBeenCalled()
-    expect(logger.mock.calls[0][0]).toMatch(/Form created/)
+    expect(logger.mock.calls[0]?.[0]).toMatch(/Form created/)
 
     // Reset
     configureDebug({ enabled: false })

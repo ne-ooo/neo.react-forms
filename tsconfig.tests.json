@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "test/setup-dom.ts",
+    "test/**/*.test.ts",
+    "test/**/*.test.tsx"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

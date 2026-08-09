@@ -25,10 +25,10 @@ describe('Validation Logic', () => {
 
     it('should validate a field with multiple validators', () => {
       const store = new FormStore({ email: '' })
-      const validators: Validator<string>[] = [
+      const validators = [
         (value) => (value ? undefined : 'Email is required'),
         (value) => (value.includes('@') ? undefined : 'Invalid email'),
-      ]
+      ] satisfies Validator<string>[]
 
       // Test empty value (fails first validator)
       let error: string | undefined
@@ -145,14 +145,14 @@ describe('Validation Logic', () => {
 
   describe('Validation Schema', () => {
     it('should support nested validation schema', () => {
-      const schema: ValidationSchema<{
-        user: { email: string; password: string }
-      }> = {
+      const schema = {
         user: {
           email: (value) => (value ? undefined : 'Email required'),
           password: (value) => (value ? undefined : 'Password required'),
         },
-      }
+      } satisfies ValidationSchema<{
+        user: { email: string; password: string }
+      }>
 
       const store = new FormStore({ user: { email: '', password: '' } })
 
@@ -168,14 +168,14 @@ describe('Validation Logic', () => {
     })
 
     it('should support array validation schema', () => {
-      const schema: ValidationSchema<{ tags: string[] }> = {
+      const schema = {
         tags: (value) =>
           Array.isArray(value) && value.length > 0
             ? undefined
             : 'At least one tag required',
-      }
+      } satisfies ValidationSchema<{ tags: string[] }>
 
-      const store = new FormStore({ tags: [] })
+      const store = new FormStore<{ tags: string[] }>({ tags: [] })
 
       const validator = schema.tags
       const error1 = validator(store.getValue('tags'))

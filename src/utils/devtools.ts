@@ -6,14 +6,153 @@
 
 import type { FormState, Path } from '../types.js'
 
+/** Value used when DevTools hides a sensitive field. */
+export const REDACTED_VALUE = '[REDACTED]' as const
+
+/** A field name, field path, or regular expression that identifies sensitive data. */
+export type SensitiveFieldMatcher = string | RegExp
+
+/** Privacy controls for snapshots and debug output. */
+export interface DevToolsPrivacyOptions {
+  /**
+   * Include sensitive values in output. This option is false by default.
+   */
+  includeSensitiveValues?: boolean
+
+  /** Add application-specific field names or paths to the default sensitive list. */
+  sensitiveFields?: readonly SensitiveFieldMatcher[]
+
+  /** Transform each non-sensitive leaf value before DevTools uses it. */
+  redactor?: (value: unknown, path: string) => unknown
+}
+
+/** Options for browser-global form exposure. */
+export interface ExposeFormOptions extends DevToolsPrivacyOptions {
+  /** Explicit confirmation that the caller wants browser-global exposure. */
+  enabled: true
+
+  /** Permit exposure when NODE_ENV is production. This option is false by default. */
+  allowInProduction?: boolean
+}
+
+/** The value shape used by privacy-aware DevTools snapshots. */
+export type DevToolsValue<Value> = Value extends (...args: never[]) => unknown
+  ? Value | typeof REDACTED_VALUE
+  : Value extends readonly (infer Item)[]
+    ? Array<DevToolsValue<Item>>
+    : Value extends Date | RegExp
+      ? Value | typeof REDACTED_VALUE
+      : Value extends object
+        ? { [Key in keyof Value]: DevToolsValue<Value[Key]> }
+        : Value | typeof REDACTED_VALUE
+
+const DEFAULT_SENSITIVE_FIELD_PATTERN =
+  /password|passwd|passcode|secret|token|authorization|api.?key|private.?key|card.?number|security.?code|cvv|cvc|social.?security|ssn|(^|[^a-z])pin([^a-z]|$)/i
+
+function regularExpressionMatches(expression: RegExp, value: string): boolean {
+  const previousLastIndex = expression.lastIndex
+  expression.lastIndex = 0
+  const matches = expression.test(value)
+  expression.lastIndex = previousLastIndex
+  return matches
+}
+
+/** Check whether a field path contains sensitive data. */
+export function isSensitiveField(
+  path: string,
+  additionalMatchers: readonly SensitiveFieldMatcher[] = []
+): boolean {
+  if (regularExpressionMatches(DEFAULT_SENSITIVE_FIELD_PATTERN, path)) return true
+
+  const normalizedPath = path.toLowerCase()
+  const lastSegment = normalizedPath.split(/[.[\]]/).filter(Boolean).at(-1)
+
+  return additionalMatchers.some((matcher) => {
+    if (typeof matcher === 'string') {
+      const normalizedMatcher = matcher.toLowerCase()
+      return normalizedPath === normalizedMatcher || lastSegment === normalizedMatcher
+    }
+    return regularExpressionMatches(matcher, path)
+  })
+}
+
+/** Apply the default DevTools privacy rules to a value. */
+export function redactDevToolsValue(
+  value: unknown,
+  path: string,
+  options: DevToolsPrivacyOptions = {}
+): unknown {
+  return redactValue(value, path, options, new WeakSet<object>(), false)
+}
+
+function redactValue(
+  value: unknown,
+  path: string,
+  options: DevToolsPrivacyOptions,
+  ancestors: WeakSet<object>,
+  forceRedaction: boolean
+): unknown {
+  const isSensitive = forceRedaction || (
+    !options.includeSensitiveValues &&
+    path.length > 0 &&
+    isSensitiveField(path, options.sensitiveFields ?? [])
+  )
+
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) return '[Circular]'
+    ancestors.add(value)
+    const redactedArray = value.map((item, index) =>
+      redactValue(
+        item,
+        path ? `${path}.${index}` : String(index),
+        options,
+        ancestors,
+        isSensitive
+      )
+    )
+    ancestors.delete(value)
+    return redactedArray
+  }
+
+  if (value !== null && typeof value === 'object') {
+    if (value instanceof Date) {
+      return isSensitive ? REDACTED_VALUE : new Date(value)
+    }
+    if (value instanceof RegExp) {
+      return isSensitive
+        ? REDACTED_VALUE
+        : new RegExp(value.source, value.flags)
+    }
+    if (ancestors.has(value)) return '[Circular]'
+
+    ancestors.add(value)
+    const redactedObject: Record<string, unknown> = {}
+    for (const [key, nestedValue] of Object.entries(value)) {
+      const nestedPath = path ? `${path}.${key}` : key
+      redactedObject[key] = redactValue(
+        nestedValue,
+        nestedPath,
+        options,
+        ancestors,
+        isSensitive
+      )
+    }
+    ancestors.delete(value)
+    return redactedObject
+  }
+
+  if (isSensitive) return REDACTED_VALUE
+  return options.redactor ? options.redactor(value, path) : value
+}
+
 /**
  * Form state snapshot for DevTools
  */
-export interface FormSnapshot<Values extends Record<string, unknown>> {
+export interface FormSnapshot<Values extends object> {
   /**
    * Current form values
    */
-  values: Values
+  values: DevToolsValue<Values>
 
   /**
    * Current errors
@@ -42,7 +181,7 @@ export interface FormSnapshot<Values extends Record<string, unknown>> {
    */
   fields: Array<{
     name: string
-    value: any
+    value: unknown
     error?: string
     touched: boolean
     dirty: boolean
@@ -59,6 +198,7 @@ export interface FormSnapshot<Values extends Record<string, unknown>> {
  *
  * @param formState - Current form state
  * @param initialValues - Initial form values (for dirty detection)
+ * @param options - Privacy options. Sensitive values are redacted by default.
  * @returns Form snapshot
  *
  * @example
@@ -67,20 +207,21 @@ export interface FormSnapshot<Values extends Record<string, unknown>> {
  * console.log('Form State:', snapshot)
  * ```
  */
-export function createFormSnapshot<Values extends Record<string, unknown>>(
+export function createFormSnapshot<Values extends object>(
   formState: FormState<Values>,
-  initialValues: Values
+  initialValues: Values,
+  options: DevToolsPrivacyOptions = {}
 ): FormSnapshot<Values> {
   // Extract field information
   const fields: Array<{
     name: string
-    value: any
+    value: unknown
     error?: string
     touched: boolean
     dirty: boolean
   }> = []
 
-  function extractFields(obj: any, parentPath = ''): void {
+  function extractFields(obj: object, parentPath = ''): void {
     for (const [key, value] of Object.entries(obj)) {
       const path = parentPath ? `${parentPath}.${key}` : key
 
@@ -91,9 +232,15 @@ export function createFormSnapshot<Values extends Record<string, unknown>>(
         // Add field info
         const initialValue = getNestedValue(initialValues, path)
         const error = formState.errors[path as Path<Values>]
-        const fieldInfo: any = {
+        const fieldInfo: {
+          name: string
+          value: unknown
+          error?: string
+          touched: boolean
+          dirty: boolean
+        } = {
           name: path,
-          value,
+          value: redactDevToolsValue(value, path, options),
           touched: formState.touched[path as Path<Values>] ?? false,
           dirty: value !== initialValue,
         }
@@ -107,10 +254,25 @@ export function createFormSnapshot<Values extends Record<string, unknown>>(
 
   extractFields(formState.values)
 
+  const errors: Partial<Record<Path<Values>, string>> = {}
+  for (const [path, error] of Object.entries(formState.errors)) {
+    if (typeof error === 'string') {
+      errors[path as Path<Values>] = redactDevToolsValue(
+        error,
+        path,
+        options
+      ) as string
+    }
+  }
+
   return {
-    values: formState.values,
-    errors: formState.errors,
-    touched: formState.touched,
+    values: redactDevToolsValue(
+      formState.values,
+      '',
+      options
+    ) as DevToolsValue<Values>,
+    errors,
+    touched: { ...formState.touched },
     state: {
       isValid: formState.isValid,
       isDirty: formState.isDirty,
@@ -127,8 +289,52 @@ export function createFormSnapshot<Values extends Record<string, unknown>>(
 /**
  * Get nested value from object by path
  */
-function getNestedValue(obj: any, path: string): any {
-  return path.split('.').reduce((current, key) => current?.[key], obj)
+function getNestedValue(obj: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (current === null || typeof current !== 'object') return undefined
+    return (current as Record<string, unknown>)[key]
+  }, obj)
+}
+
+function protectSnapshot<Values extends object>(
+  snapshot: FormSnapshot<Values>,
+  options: DevToolsPrivacyOptions
+): FormSnapshot<Values> {
+  const errors: Partial<Record<Path<Values>, string>> = {}
+  for (const [path, error] of Object.entries(snapshot.errors)) {
+    if (typeof error === 'string') {
+      errors[path as Path<Values>] = redactDevToolsValue(
+        error,
+        path,
+        options
+      ) as string
+    }
+  }
+
+  return {
+    values: redactDevToolsValue(
+      snapshot.values,
+      '',
+      options
+    ) as DevToolsValue<Values>,
+    errors,
+    touched: { ...snapshot.touched },
+    state: { ...snapshot.state },
+    fields: snapshot.fields.map((field) => ({
+      ...field,
+      value: redactDevToolsValue(field.value, field.name, options),
+      ...(field.error === undefined
+        ? {}
+        : {
+            error: redactDevToolsValue(
+              field.error,
+              field.name,
+              options
+            ) as string,
+          }),
+    })),
+    timestamp: snapshot.timestamp,
+  }
 }
 
 /**
@@ -136,38 +342,42 @@ function getNestedValue(obj: any, path: string): any {
  *
  * @param formId - Form identifier
  * @param snapshot - Form snapshot
+ * @param options - Privacy options. Sensitive values are redacted by default.
  *
  * @example
  * ```ts
  * logFormState('signup-form', createFormSnapshot(form, initialValues))
  * ```
  */
-export function logFormState<Values extends Record<string, unknown>>(
+export function logFormState<Values extends object>(
   formId: string,
-  snapshot: FormSnapshot<Values>
+  snapshot: FormSnapshot<Values>,
+  options: DevToolsPrivacyOptions = {}
 ): void {
+  const protectedSnapshot = protectSnapshot(snapshot, options)
+
   console.group(`📋 Form State: ${formId}`)
 
   // Overall state
-  console.log('State:', snapshot.state)
+  console.log('State:', protectedSnapshot.state)
 
   // Values
-  console.log('Values:', snapshot.values)
+  console.log('Values:', protectedSnapshot.values)
 
   // Errors (if any)
-  if (Object.keys(snapshot.errors).length > 0) {
-    console.error('Errors:', snapshot.errors)
+  if (Object.keys(protectedSnapshot.errors).length > 0) {
+    console.error('Errors:', protectedSnapshot.errors)
   }
 
   // Touched fields
-  const touchedFields = Object.keys(snapshot.touched)
+  const touchedFields = Object.keys(protectedSnapshot.touched)
   if (touchedFields.length > 0) {
     console.log('Touched Fields:', touchedFields)
   }
 
   // Field details
   console.table(
-    snapshot.fields.map((field) => ({
+    protectedSnapshot.fields.map((field) => ({
       Field: field.name,
       Value: JSON.stringify(field.value),
       Error: field.error || '-',
@@ -184,35 +394,73 @@ export function logFormState<Values extends Record<string, unknown>>(
  *
  * @param formId - Form identifier
  * @param snapshot - Form snapshot
+ * @param options - Explicit exposure and privacy options
+ *
+ * @returns Cleanup function that removes this exposure
  *
  * @example
  * ```ts
  * // In development, expose form to window
  * if (process.env.NODE_ENV === 'development') {
- *   exposeFormToWindow('signup-form', createFormSnapshot(form, initialValues))
+ *   const cleanup = exposeFormToWindow(
+ *     'signup-form',
+ *     createFormSnapshot(form, initialValues),
+ *     { enabled: true }
+ *   )
  * }
  *
  * // Then in DevTools console:
  * window.__NEO_FORMS__.['signup-form']
  * ```
  */
-export function exposeFormToWindow<Values extends Record<string, unknown>>(
+export function exposeFormToWindow<Values extends object>(
   formId: string,
-  snapshot: FormSnapshot<Values>
-): void {
-  if (typeof window === 'undefined') return
-
-  // Create global forms object if it doesn't exist
-  if (!(window as any).__NEO_FORMS__) {
-    ;(window as any).__NEO_FORMS__ = {}
+  snapshot: FormSnapshot<Values>,
+  options: ExposeFormOptions
+): () => void {
+  const noCleanupNeeded = (): void => {}
+  if (typeof window === 'undefined' || options.enabled !== true) {
+    return noCleanupNeeded
   }
 
-  ;(window as any).__NEO_FORMS__[formId] = snapshot
+  const runtimeProcess = (
+    globalThis as typeof globalThis & {
+      process?: { env?: { NODE_ENV?: string } }
+    }
+  ).process
+  if (
+    runtimeProcess?.env?.NODE_ENV === 'production' &&
+    !options.allowInProduction
+  ) {
+    return noCleanupNeeded
+  }
+
+  const protectedSnapshot = protectSnapshot(snapshot, options)
+  const devToolsWindow = window as Window & {
+    __NEO_FORMS__?: Record<string, unknown>
+  }
+
+  // Create global forms object if it doesn't exist
+  if (!devToolsWindow.__NEO_FORMS__) {
+    devToolsWindow.__NEO_FORMS__ = Object.create(null) as Record<string, unknown>
+  }
+
+  devToolsWindow.__NEO_FORMS__[formId] = protectedSnapshot
 
   // Log helpful message
   console.log(
     `📋 Form "${formId}" exposed to DevTools: window.__NEO_FORMS__['${formId}']`
   )
+
+  return () => {
+    const registry = devToolsWindow.__NEO_FORMS__
+    if (!registry || registry[formId] !== protectedSnapshot) return
+
+    delete registry[formId]
+    if (Object.keys(registry).length === 0) {
+      delete devToolsWindow.__NEO_FORMS__
+    }
+  }
 }
 
 /**
@@ -222,7 +470,7 @@ export function exposeFormToWindow<Values extends Record<string, unknown>>(
  * @param after - Current snapshot
  * @returns Diff object
  */
-export function diffFormState<Values extends Record<string, unknown>>(
+export function diffFormState<Values extends object>(
   before: FormSnapshot<Values>,
   after: FormSnapshot<Values>
 ): {

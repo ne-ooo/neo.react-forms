@@ -4,7 +4,7 @@
  * Combine multiple validators together
  */
 
-import type { Validator } from '../types.js'
+import type { ValidationContext, Validator } from '../types.js'
 
 /**
  * Compose multiple validators (runs all, returns first error)
@@ -23,9 +23,9 @@ import type { Validator } from '../types.js'
  * ```
  */
 export function compose<T, Values = unknown>(validators: Validator<T, Values>[]): Validator<T, Values> {
-  return async (value: T, values?: Values) => {
+  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
     for (const validator of validators) {
-      const error = await validator(value, values)
+      const error = await validator(value, values, context)
       if (error) {
         return error
       }
@@ -48,11 +48,15 @@ export function compose<T, Values = unknown>(validators: Validator<T, Values>[])
  * ```
  */
 export function optional<T, Values = unknown>(validator: Validator<T, Values>): Validator<T | null | undefined, Values> {
-  return async (value: T | null | undefined, values?: Values) => {
+  return async (
+    value: T | null | undefined,
+    values?: Values,
+    context?: ValidationContext<Values>
+  ) => {
     if (value === null || value === undefined || value === '') {
       return null
     }
-    return validator(value as T, values)
+    return validator(value as T, values, context)
   }
 }
 
@@ -74,12 +78,16 @@ export function optional<T, Values = unknown>(validator: Validator<T, Values>): 
  * ```
  */
 export function when<T, Values = unknown>(
-  condition: (value: T, values?: Values) => boolean,
+  condition: (
+    value: T,
+    values?: Values,
+    context?: ValidationContext<Values>
+  ) => boolean | Promise<boolean>,
   validator: Validator<T, Values>
 ): Validator<T, Values> {
-  return async (value: T, values?: Values) => {
-    if (condition(value, values)) {
-      return validator(value, values)
+  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
+    if (await condition(value, values, context)) {
+      return validator(value, values, context)
     }
     return null
   }
@@ -102,7 +110,7 @@ export function when<T, Values = unknown>(
  * ```
  */
 export function custom<T, Values = unknown>(
-  validate: (value: T, values?: Values) => string | null | Promise<string | null>
+  validate: Validator<T, Values>
 ): Validator<T, Values> {
   return validate
 }
@@ -122,11 +130,15 @@ export function custom<T, Values = unknown>(
  * ```
  */
 export function test<T, Values = unknown>(
-  test: (value: T, values?: Values) => boolean | Promise<boolean>,
+  test: (
+    value: T,
+    values?: Values,
+    context?: ValidationContext<Values>
+  ) => boolean | Promise<boolean>,
   message: string
 ): Validator<T, Values> {
-  return async (value: T, values?: Values) => {
-    const result = await test(value, values)
+  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
+    const result = await test(value, values, context)
     return result ? null : message
   }
 }

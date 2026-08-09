@@ -4,10 +4,16 @@
  * Provides helpful logging and debugging tools during development
  */
 
+import {
+  redactDevToolsValue,
+  type DevToolsPrivacyOptions,
+  type SensitiveFieldMatcher,
+} from './devtools.js'
+
 /**
  * Debug logger configuration
  */
-interface DebugConfig {
+export interface DebugConfig extends DevToolsPrivacyOptions {
   /**
    * Enable debug logging
    */
@@ -36,7 +42,13 @@ interface DebugConfig {
   /**
    * Custom logger function (defaults to console.log)
    */
-  logger?: (message: string, data?: any) => void
+  logger?: (message: string, data?: unknown) => void
+
+  /** Include sensitive values in logs. This option is false by default. */
+  includeSensitiveValues?: boolean
+
+  /** Add application-specific sensitive field names or paths. */
+  sensitiveFields?: readonly SensitiveFieldMatcher[]
 }
 
 /**
@@ -79,7 +91,7 @@ export function getDebugConfig(): DebugConfig {
 /**
  * Log a debug message
  */
-function log(category: string, message: string, data?: any): void {
+function log(category: string, message: string, data?: unknown): void {
   if (!debugConfig.enabled) return
 
   const logger = debugConfig.logger || console.log
@@ -96,13 +108,18 @@ function log(category: string, message: string, data?: any): void {
 /**
  * Log field value change
  */
-export function debugValueChange(formId: string, fieldName: string, oldValue: any, newValue: any): void {
+export function debugValueChange(
+  formId: string,
+  fieldName: string,
+  oldValue: unknown,
+  newValue: unknown
+): void {
   if (!debugConfig.enabled || !debugConfig.logValueChanges) return
 
   log('value', `${formId}.${fieldName} changed`, {
     field: fieldName,
-    oldValue,
-    newValue,
+    oldValue: redactDevToolsValue(oldValue, fieldName, debugConfig),
+    newValue: redactDevToolsValue(newValue, fieldName, debugConfig),
   })
 }
 
@@ -120,7 +137,11 @@ export function debugValidation(
   log(
     'validation',
     `${status} ${formId}.${fieldName} validated in ${result.duration}ms`,
-    result.error ? { error: result.error } : undefined
+    result.error
+      ? {
+          error: redactDevToolsValue(result.error, fieldName, debugConfig),
+        }
+      : undefined
   )
 }
 
@@ -129,7 +150,7 @@ export function debugValidation(
  */
 export function debugSubmission(
   formId: string,
-  result: { success: boolean; duration: number; error?: any }
+  result: { success: boolean; duration: number; error?: unknown }
 ): void {
   if (!debugConfig.enabled || !debugConfig.logSubmissions) return
 
@@ -137,7 +158,15 @@ export function debugSubmission(
   log(
     'submission',
     `${status} ${formId} submitted in ${result.duration}ms`,
-    result.error ? { error: result.error } : undefined
+    result.error
+      ? {
+          error: redactDevToolsValue(
+            result.error,
+            'submission.error',
+            debugConfig
+          ),
+        }
+      : undefined
   )
 }
 
@@ -151,18 +180,28 @@ export function debugStateUpdate(
 ): void {
   if (!debugConfig.enabled || !debugConfig.logStateUpdates) return
 
-  log('state', `${formId}.${fieldName} state updated`, state)
+  log('state', `${formId}.${fieldName} state updated`, {
+    ...state,
+    ...(state.error === undefined
+      ? {}
+      : {
+          error: redactDevToolsValue(state.error, fieldName, debugConfig),
+        }),
+  })
 }
 
 /**
  * Log form creation
  */
-export function debugFormCreated(formId: string, initialValues: any): void {
+export function debugFormCreated<Values extends object>(
+  formId: string,
+  initialValues: Values
+): void {
   if (!debugConfig.enabled) return
 
   log('init', `Form created: ${formId}`, {
     fields: Object.keys(initialValues),
-    initialValues,
+    initialValues: redactDevToolsValue(initialValues, '', debugConfig),
   })
 }
 
@@ -178,10 +217,10 @@ export function createFormId(customId?: string): string {
 /**
  * Log form state snapshot (useful for debugging)
  */
-export function debugFormState(formId: string, state: any): void {
+export function debugFormState(formId: string, state: unknown): void {
   if (!debugConfig.enabled) return
 
-  log('snapshot', `${formId} state`, state)
+  log('snapshot', `${formId} state`, redactDevToolsValue(state, '', debugConfig))
 }
 
 /**

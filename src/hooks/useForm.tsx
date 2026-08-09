@@ -8,21 +8,38 @@
  * - Built-in validation support
  */
 
-import { useMemo, useCallback, useState, useSyncExternalStore, type FormEvent } from 'react'
-import { FormStore } from '../core/store.js'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
+import { FormStore, getValueByPath, type FormStoreSlice } from '../core/store.js'
 import { Field as FieldComponent } from '../components/Field.js'
 import { FieldArray as FieldArrayComponent } from '../components/FieldArray.js'
+import {
+  createBoundUseField,
+  createBoundUseFormState,
+  type FieldHookOperations,
+} from './boundHooks.js'
+import { createImmutableSnapshot } from '../utils/immutable.js'
 import type {
   UseFormOptions,
   UseFormReturn,
-  FormState,
   Path,
+  ArrayPath,
   ValueAtPath,
   FieldState,
   ValidationSchema,
   Validator,
+  ValidationContext,
   FieldComponentProps,
   FieldArrayComponentProps,
+  DeepReadonly,
 } from '../types.js'
 
 /**
@@ -31,12 +48,13 @@ import type {
 async function runValidators<T, Values = unknown>(
   value: T,
   validators: Validator<T, Values> | Validator<T, Values>[],
-  values?: Values
+  values: Values | undefined,
+  context: ValidationContext<Values>
 ): Promise<string | undefined> {
   const validatorArray = Array.isArray(validators) ? validators : [validators]
 
   for (const validator of validatorArray) {
-    const error = await validator(value, values)
+    const error = await validator(value, values, context)
     if (error) {
       return error
     }
@@ -48,7 +66,7 @@ async function runValidators<T, Values = unknown>(
 /**
  * Get validator for a field from nested validation schema
  */
-function getValidatorForPath<Values extends Record<string, unknown>>(
+function getValidatorForPath<Values extends object>(
   schema: ValidationSchema<Values> | undefined,
   path: string
 ): Validator<unknown> | Validator<unknown>[] | undefined {
@@ -60,6 +78,12 @@ function getValidatorForPath<Values extends Record<string, unknown>>(
   for (const key of keys) {
     if (current === null || current === undefined || typeof current !== 'object') {
       return undefined
+    }
+
+    // Array item validation schemas describe one item, so numeric path
+    // segments do not appear in the schema itself.
+    if (/^\d+$/.test(key) && !(key in (current as Record<string, unknown>))) {
+      continue
     }
     current = (current as Record<string, unknown>)[key]
   }
@@ -96,57 +120,121 @@ function getValidatorForPath<Values extends Record<string, unknown>>(
  * form.setFieldValue('invalid', 'value') // ✗ TypeScript error
  * ```
  */
-export function useForm<Values extends Record<string, unknown>>(
+export function useForm<Values extends object>(
   options: UseFormOptions<Values>
 ): UseFormReturn<Values> {
   const { initialValues, validate, validateForm, onSubmit, onSubmitError, mode = 'onBlur', reValidateMode = 'onChange', computed } = options
 
-  // Create store (memoized - only once per form instance)
-  const store = useMemo(() => new FormStore(initialValues, computed), [])
+  // Create one store per mounted form instance. initialValues and computed are
+  // intentionally snapshots; reset() is the API for changing the baseline.
+  const [store] = useState(() => new FormStore(initialValues, computed))
+  const [observedSlices] = useState(() => new Set<FormStoreSlice>())
+  const [useBoundFormState] = useState(() => createBoundUseFormState(store))
 
-  // Force re-render when store changes
+  // Re-render only for form-state slices actually read by the owner. A form
+  // that only renders bound Fields stays isolated from unrelated field work.
   useSyncExternalStore(
-    useCallback((callback) => store.subscribeToStore(callback), [store]),
+    useCallback(
+      (callback) =>
+        store.subscribeToStore((changedSlices) => {
+          for (const slice of changedSlices) {
+            if (observedSlices.has(slice)) {
+              callback()
+              return
+            }
+          }
+        }),
+      [observedSlices, store]
+    ),
+    useCallback(() => store.getVersion(), [store]),
     useCallback(() => store.getVersion(), [store])
   )
 
-  // Form-level state (not in store yet)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitCount, setSubmitCount] = useState(0)
+  const runFieldValidation = useCallback(
+    async (
+      name: Path<Values>,
+      validators: Validator<unknown, Values> | Validator<unknown, Values>[],
+      commit: boolean,
+      existingController?: AbortController,
+      existingValues?: DeepReadonly<Values>
+    ): Promise<{ error: string | undefined; current: boolean }> => {
+      const readonlyValues = existingValues ?? createImmutableSnapshot(store.getValues())
+      const values = readonlyValues as Values
+      const value = getValueByPath(values, name)
+      const controller = existingController ?? store.startValidation(name)
+      const ownsController = existingController === undefined
+
+      try {
+        const error = await runValidators(value, validators, values, {
+          name,
+          signal: controller.signal,
+          values: readonlyValues,
+        })
+        const current = store.isValidationCurrent(name, controller)
+        if (commit && current) {
+          store.setError(name, error)
+        }
+        return { error, current }
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return { error: undefined, current: false }
+        }
+        throw error
+      } finally {
+        if (ownsController) store.endValidation(name, controller)
+      }
+    },
+    [store]
+  )
 
   // Validate a single field
   const validateField = useCallback(
     async <P extends Path<Values>>(name: P): Promise<boolean> => {
-      const value = store.getValue(name)
       const validators = getValidatorForPath(validate, name)
 
       if (!validators) {
+        store.markValidated(name)
         store.setError(name, undefined)
         return true
       }
 
-      const values = store.getValues()
-      store.startValidation(name)
-      try {
-        const error = await runValidators(value, validators, values)
-        store.setError(name, error)
-        return !error
-      } finally {
-        store.endValidation(name)
-      }
+      const { error } = await runFieldValidation(
+        name,
+        validators as Validator<unknown, Values> | Validator<unknown, Values>[],
+        true
+      )
+      return !error
     },
-    [validate, store]
+    [runFieldValidation, validate, store]
+  )
+
+  // Keep the bound Field component type stable even when callers declare the
+  // validation schema inline and therefore create a new validateField closure
+  // on each form render. Changing a JSX component function unmounts its input.
+  const validateFieldRef = useRef(validateField)
+  useEffect(() => {
+    validateFieldRef.current = validateField
+  }, [validateField])
+  const boundValidateField = useCallback(
+    <P extends Path<Values>>(name: P) => validateFieldRef.current(name),
+    []
   )
 
   // Validate entire form
-  const validateFormFn = useCallback(async (): Promise<boolean> => {
+  const validateFormFn = useCallback(async (touchFields = false): Promise<boolean> => {
     // Run all field validators
-    const values = store.getValues()
+    const currentValues = store.getValues()
+    const readonlyValues = createImmutableSnapshot(currentValues)
+    const values = readonlyValues as Values
     const errors: Partial<Record<Path<Values>, string>> = {}
+    const validationTasks: Array<{
+      name: Path<Values>
+      validators: Validator<unknown, Values> | Validator<unknown, Values>[]
+    }> = []
 
     if (validate) {
-      // Validate all fields in schema
-      const validateAllFields = async (obj: unknown, prefix = ''): Promise<void> => {
+      // Expand nested schemas, including the schema for every current array item.
+      const collectValidationTasks = (obj: unknown, prefix = ''): void => {
         if (obj === null || obj === undefined || typeof obj !== 'object') {
           return
         }
@@ -156,80 +244,127 @@ export function useForm<Values extends Record<string, unknown>>(
 
           // Check if this is a validator function or array of validators
           if (typeof validators === 'function' || Array.isArray(validators)) {
-            const value = store.getValue(path as Path<Values>)
-            store.startValidation(path as Path<Values>)
-            try {
-              const error = await runValidators(value, validators as Validator<unknown, Values> | Validator<unknown, Values>[], values)
-              if (error) {
-                errors[path as Path<Values>] = error
-              }
-            } finally {
-              store.endValidation(path as Path<Values>)
-            }
+            validationTasks.push({
+              name: path as Path<Values>,
+              validators: validators as
+                | Validator<unknown, Values>
+                | Validator<unknown, Values>[],
+            })
           } else if (typeof validators === 'object') {
-            // Recurse for nested objects
-            await validateAllFields(validators, path)
+            const fieldValue = getValueByPath(values, path)
+            if (Array.isArray(fieldValue)) {
+              fieldValue.forEach((_, index) => {
+                collectValidationTasks(validators, `${path}.${index}`)
+              })
+            } else {
+              collectValidationTasks(validators, path)
+            }
           }
         }
       }
 
-      await validateAllFields(validate)
+      collectValidationTasks(validate)
+
     }
 
-    // Run form-level validation
-    if (validateForm) {
-      const formErrors = await validateForm(values)
-      if (formErrors) {
-        Object.assign(errors, formErrors)
+    const controllers = store.batch(() => {
+      const next = new Map<Path<Values>, AbortController>()
+      for (const { name } of validationTasks) {
+        next.set(name, store.startValidation(name))
       }
+      return next
+    })
+    let validationsEnded = false
+    const endValidations = (): void => {
+      if (validationsEnded) return
+      store.batch(() => {
+        for (const [name, controller] of controllers) {
+          store.endValidation(name, controller)
+        }
+      })
+      validationsEnded = true
     }
 
-    // Update all errors in store
-    // First, clear all existing errors
-    const currentErrors = store.getErrors()
-    for (const key of Object.keys(currentErrors)) {
-      store.setError(key as Path<Values>, undefined)
-    }
+    try {
+      const results = await Promise.all(
+        validationTasks.map(async ({ name, validators }) => ({
+          name,
+          ...(await runFieldValidation(
+            name,
+            validators,
+            false,
+            controllers.get(name),
+            readonlyValues
+          )),
+        }))
+      )
 
-    // Then set new errors
-    for (const [key, error] of Object.entries(errors)) {
-      if (error && typeof error === 'string') {
-        store.setError(key as Path<Values>, error)
+      // A newer field validation superseded this form validation. Treat the
+      // form result as stale instead of clearing errors or allowing submit.
+      if (results.some(({ current }) => !current)) {
+        return false
       }
-    }
 
-    return Object.keys(errors).length === 0
-  }, [validate, validateForm, store])
+      for (const result of results) {
+        if (result.error) errors[result.name] = result.error
+      }
+
+      // Run form-level validation
+      if (validateForm) {
+        const formErrors = await validateForm(values)
+        if (formErrors) Object.assign(errors, formErrors)
+      }
+
+      // Do not publish a form-level result for a value snapshot that changed
+      // while asynchronous validation was running.
+      if (store.getValues() !== currentValues) return false
+
+      const touchedPaths = touchFields
+        ? Array.from(
+            new Set<Path<Values>>([
+              ...validationTasks.map(({ name }) => name),
+              ...(Object.keys(errors) as Path<Values>[]),
+            ])
+          )
+        : []
+
+      store.batch(() => {
+        for (const [name, controller] of controllers) {
+          store.endValidation(name, controller)
+        }
+        validationsEnded = true
+        store.replaceErrors(errors, touchedPaths)
+      })
+
+      return Object.keys(errors).length === 0
+    } finally {
+      endValidations()
+    }
+  }, [runFieldValidation, validate, validateForm, store])
 
   // Form submission handler
   const handleSubmit = useCallback(
     async (e?: FormEvent) => {
       e?.preventDefault()
 
-      setSubmitCount((count) => count + 1)
-
-      // Validate form
-      const isValid = await validateFormFn()
-
-      if (!isValid) {
-        return
-      }
-
-      if (!onSubmit) {
-        return
-      }
+      const submission = store.startSubmission()
+      if (!submission) return
 
       try {
-        setIsSubmitting(true)
-        await onSubmit(store.getValues())
-      } catch (error) {
-        if (onSubmitError) {
-          onSubmitError(error)
-        } else {
-          throw error
+        const isValid = await validateFormFn(true)
+        if (!isValid || !onSubmit) return
+
+        try {
+          await onSubmit(store.getValues())
+        } catch (error) {
+          if (onSubmitError) {
+            onSubmitError(error)
+          } else {
+            throw error
+          }
         }
       } finally {
-        setIsSubmitting(false)
+        store.endSubmission(submission)
       }
     },
     [validateFormFn, onSubmit, onSubmitError, store]
@@ -238,14 +373,15 @@ export function useForm<Values extends Record<string, unknown>>(
   // Field operations
   const setFieldValue = useCallback(
     <P extends Path<Values>>(name: P, value: ValueAtPath<Values, P>) => {
+      const wasValidated = store.hasValidated(name)
       store.setValue(name, value)
 
-      // Auto-validate if in onChange mode or if field was already validated
-      if (reValidateMode === 'onChange' || store.getError(name)) {
-        validateField(name)
+      const activeMode = wasValidated ? reValidateMode : mode
+      if (activeMode === 'onChange' || activeMode === 'all') {
+        void validateField(name).catch(() => undefined)
       }
     },
-    [store, validateField, reValidateMode]
+    [store, validateField, mode, reValidateMode]
   )
 
   const setFieldError = useCallback(
@@ -257,14 +393,15 @@ export function useForm<Values extends Record<string, unknown>>(
 
   const setFieldTouched = useCallback(
     <P extends Path<Values>>(name: P, touched: boolean) => {
+      const wasValidated = store.hasValidated(name)
       store.setTouched(name, touched)
 
-      // Auto-validate if in onBlur mode
-      if (mode === 'onBlur' && touched) {
-        validateField(name)
+      const activeMode = wasValidated ? reValidateMode : mode
+      if (touched && (activeMode === 'onBlur' || activeMode === 'all')) {
+        void validateField(name).catch(() => undefined)
       }
     },
-    [store, validateField, mode]
+    [store, validateField, mode, reValidateMode]
   )
 
   const getFieldState = useCallback(
@@ -281,6 +418,11 @@ export function useForm<Values extends Record<string, unknown>>(
     [store]
   )
 
+  const batch = useCallback(
+    <Result,>(callback: () => Result): Result => store.batch(callback),
+    [store]
+  )
+
   const subscribe = useCallback(
     <P extends Path<Values>>(
       name: P,
@@ -291,47 +433,86 @@ export function useForm<Values extends Record<string, unknown>>(
     [store]
   )
 
-  // Compute form state
-  const values = store.getValues()
-  const errors = store.getErrors()
-  const touched = store.getTouchedFields()
-  const isDirty = store.isDirty()
-  const isValid = store.isValid()
-
-  const formState: FormState<Values> = {
-    values,
-    errors,
-    touched,
-    isSubmitting,
-    isSubmitted: submitCount > 0,
-    isValid,
-    isDirty,
-    isValidating: store.isValidating(),
-    submitCount,
-  }
-
   // Field component (pre-bound to this form)
   const BoundField = useCallback(
-    function BoundField<P extends Path<Values>>(props: Omit<FieldComponentProps<Values, P>, 'store'>): JSX.Element {
-      // Only pass field-level validation modes (convert form-level modes to field equivalents)
-      const fieldMode = (mode === 'onSubmit' || mode === 'all') ? 'onBlur' : mode
-      const fieldReValidateMode = (reValidateMode === 'onSubmit' || reValidateMode === 'all') ? 'onChange' : reValidateMode
-      return <FieldComponent {...props} store={store} mode={fieldMode} reValidateMode={fieldReValidateMode} />
+    function BoundField<P extends Path<Values>>(
+      props: FieldComponentProps<Values, P>
+    ): ReactNode {
+      return (
+        <FieldComponent
+          {...props}
+          store={store}
+          mode={props.mode ?? mode}
+          reValidateMode={props.reValidateMode ?? reValidateMode}
+          validateField={boundValidateField}
+        />
+      )
     },
-    [store, mode, reValidateMode]
-  ) as <P extends Path<Values>>(props: Omit<FieldComponentProps<Values, P>, 'store'>) => JSX.Element
+    [store, mode, reValidateMode, boundValidateField]
+  ) as <P extends Path<Values>>(props: FieldComponentProps<Values, P>) => ReactNode
 
   // FieldArray component (pre-bound to this form)
   const BoundFieldArray = useCallback(
-    function BoundFieldArray<P extends Path<Values>>(props: Omit<FieldArrayComponentProps<Values, P>, 'store'>): JSX.Element {
+    function BoundFieldArray<P extends ArrayPath<Values>>(
+      props: FieldArrayComponentProps<Values, P>
+    ): ReactNode {
       return <FieldArrayComponent {...props} store={store} />
     },
     [store]
-  ) as <P extends Path<Values>>(props: Omit<FieldArrayComponentProps<Values, P>, 'store'>) => JSX.Element
+  ) as <P extends ArrayPath<Values>>(
+    props: FieldArrayComponentProps<Values, P>
+  ) => ReactNode
+
+  const fieldOperations = useMemo<FieldHookOperations<Values>>(() => ({
+    setFieldValue,
+    setFieldError,
+    setFieldTouched,
+    validateField,
+  }), [setFieldValue, setFieldError, setFieldTouched, validateField])
+  const useBoundField = useMemo(
+    () => createBoundUseField(store, fieldOperations),
+    [fieldOperations, store]
+  )
 
   return {
-    // Form state
-    ...formState,
+    // Form state is exposed through live getters. Reading a getter during
+    // render subscribes the owner only to that state slice.
+    get values() {
+      observedSlices.add('values')
+      return store.getValues()
+    },
+    get errors() {
+      observedSlices.add('errors')
+      return store.getErrors()
+    },
+    get touched() {
+      observedSlices.add('touched')
+      return store.getTouchedFields()
+    },
+    get isSubmitting() {
+      observedSlices.add('submission')
+      return store.isSubmitting()
+    },
+    get isSubmitted() {
+      observedSlices.add('submission')
+      return store.getSubmitCount() > 0
+    },
+    get isValid() {
+      observedSlices.add('valid')
+      return store.isValid()
+    },
+    get isDirty() {
+      observedSlices.add('dirty')
+      return store.isDirty()
+    },
+    get isValidating() {
+      observedSlices.add('validating')
+      return store.isValidating()
+    },
+    get submitCount() {
+      observedSlices.add('submission')
+      return store.getSubmitCount()
+    },
 
     // Operations
     setFieldValue,
@@ -342,7 +523,12 @@ export function useForm<Values extends Record<string, unknown>>(
     validate: validateFormFn,
     handleSubmit,
     reset,
+    batch,
     subscribe,
+
+    // Hooks
+    useField: useBoundField,
+    useFormState: useBoundFormState,
 
     // Components
     Field: BoundField,

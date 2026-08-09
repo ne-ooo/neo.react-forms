@@ -29,6 +29,7 @@ export {
   contains,
   startsWith,
   endsWith,
+  type UrlValidatorOptions,
 } from './string.js'
 
 // Number validators

@@ -1,6 +1,6 @@
 ---
 name: migrate-from-formik
-description: Migration guide from Formik and React Hook Form to neo.react-forms — same mental model as Formik (values/errors/touched/handleSubmit), field-level subscriptions like React Hook Form, 96% smaller than Formik, perfect TypeScript inference, 36 built-in validators, FieldArray with stable keys, Zod adapter
+description: Migration guide from Formik and React Hook Form to neo.react-forms — typed values and paths, field subscriptions, 36 built-in validators, FieldArray with stable keys, and a Zod adapter
 version: "1.0.0"
 globs:
   - "**/*.ts"
@@ -15,12 +15,12 @@ globs:
 
 | | Formik | React Hook Form | neo.react-forms |
 |---|--------|-----------------|-----------------|
-| **Bundle** | ~45 KB | ~33 KB | ~7.1 KB |
-| **Re-renders** | Every field on any change | Field-level | Field-level |
+| **Bundle** | Measure in your application | Measure in your application | Measure in your application |
+| **Updates** | Form context | Refs and subscriptions | Field subscriptions |
 | **Validators** | Yup/Zod only | resolvers | 36 built-in + Zod |
-| **TypeScript** | Manual generics | Good | Perfect inference |
+| **TypeScript** | Manual generics | Manual generics | Inference from initial values |
 | **Tree-shaking** | No | Partial | Full |
-| **Dependencies** | 7+ | Zero | Zero |
+| **Dependencies** | Runtime dependencies | No runtime dependency | No runtime dependency |
 | **FieldArray** | Separate package | Built-in | Built-in |
 
 ## Migrating from Formik
@@ -49,13 +49,14 @@ import { Formik, Form, Field, ErrorMessage } from 'formik'
 </Formik>
 
 // After — neo.react-forms
-import { useForm, required, email, compose } from '@lpm.dev/neo.react-forms'
+import { useForm } from '@lpm.dev/neo.react-forms'
+import { compose, email, required } from '@lpm.dev/neo.react-forms/validators'
 
 function LoginForm() {
   const form = useForm({
     initialValues: { email: '', password: '' },
     validate: {
-      email: compose(required(), email()),
+      email: compose([required(), email()]),
       password: required(),
     },
     onSubmit: async (values) => { await api.login(values) },
@@ -117,13 +118,13 @@ const validationSchema = Yup.object({
 <Formik validationSchema={validationSchema} ...>
 
 // After — built-in validators (no extra dependency)
-import { required, email, min, minLength, compose } from '@lpm.dev/neo.react-forms'
+import { required, email, min, minLength, compose } from '@lpm.dev/neo.react-forms/validators'
 
 useForm({
   validate: {
-    email: compose(required('Required'), email('Invalid email')),
-    age: compose(required(), min(18, 'Must be 18+')),
-    password: compose(required(), minLength(8, 'Min 8 chars')),
+    email: compose([required('Required'), email('Invalid email')]),
+    age: min(18, 'Must be 18+'),
+    password: compose([required(), minLength(8, 'Min 8 chars')]),
   },
 })
 ```
@@ -218,14 +219,15 @@ function LoginForm() {
 }
 
 // After — neo.react-forms
-import { useForm, required, minLength, compose } from '@lpm.dev/neo.react-forms'
+import { useForm } from '@lpm.dev/neo.react-forms'
+import { compose, minLength, required } from '@lpm.dev/neo.react-forms/validators'
 
 function LoginForm() {
   const form = useForm({
     initialValues: { email: '', password: '' },
     validate: {
       email: required('Required'),
-      password: compose(required(), minLength(8)),
+      password: compose([required(), minLength(8)]),
     },
     onSubmit: async (values) => { ... },
   })
@@ -281,7 +283,7 @@ register('email', {
 
 // neo.react-forms — composable validators
 validate: {
-  email: compose(required(), email(), custom(async (value) => { ... })),
+  email: compose([required(), email(), custom(async (value) => { ... })]),
 }
 ```
 
@@ -323,13 +325,13 @@ form.setFieldValue('age', 'abc')  // TS error! number expected
 form.setFieldValue('typo', '')    // TS error! 'typo' not a valid path
 ```
 
-Neither Formik nor React Hook Form achieves this level of inference.
+The compiler checks paths and values from `initialValues`.
 
 ### Built-in Validators
 
 ```tsx
 // 36 validators included — no Yup/Zod dependency needed
-import { required, email, min, max, between, integer, positive, minLength, maxLength, pattern, compose, optional, when, oneOf } from '@lpm.dev/neo.react-forms'
+import { required, email, min, max, between, integer, positive, minLength, maxLength, pattern, compose, optional, when, oneOf } from '@lpm.dev/neo.react-forms/validators'
 ```
 
 ### Computed Fields

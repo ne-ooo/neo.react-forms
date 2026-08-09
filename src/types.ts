@@ -7,8 +7,7 @@
  * - Automatic validation schema typing
  */
 
-import type { FormEvent, ChangeEvent, FocusEvent } from 'react'
-import type { FormStore } from './core/store.js'
+import type { FormEvent, ChangeEvent, FocusEvent, ReactNode } from 'react'
 
 /**
  * Extract all possible paths from a nested object
@@ -18,14 +17,46 @@ import type { FormStore } from './core/store.js'
  * type Paths = Path<Values>
  * // "user" | "user.email" | "user.profile" | "user.profile.age"
  */
-export type Path<T> = T extends object
+type PathLeaf =
+  | Date
+  | RegExp
+  | Error
+  | ((...args: never[]) => unknown)
+  | Promise<unknown>
+  | Map<unknown, unknown>
+  | ReadonlyMap<unknown, unknown>
+  | Set<unknown>
+  | ReadonlySet<unknown>
+  | WeakMap<object, unknown>
+  | WeakSet<object>
+  | ArrayBuffer
+  | ArrayBufferView
+  | Blob
+  | File
+
+type NestedPath<Key extends string, Value> = NonNullable<Value> extends readonly (
+  infer Item
+)[]
+  ?
+      | Key
+      | `${Key}.${number}`
+      | (NonNullable<Item> extends PathLeaf
+          ? never
+          : NonNullable<Item> extends object
+            ? `${Key}.${number}.${Path<NonNullable<Item>>}`
+            : never)
+  : NonNullable<Value> extends PathLeaf
+    ? Key
+    : NonNullable<Value> extends object
+      ? Key | `${Key}.${Path<NonNullable<Value>>}`
+      : Key
+
+export type Path<T> = T extends PathLeaf
+  ? never
+  : T extends object
   ? {
       [K in keyof T]-?: K extends string
-        ? T[K] extends Array<infer U>
-          ? `${K}` | `${K}.${number}` | `${K}.${number}.${Path<U> & string}`
-          : T[K] extends object
-          ? `${K}` | `${K}.${Path<T[K]> & string}`
-          : `${K}`
+        ? NestedPath<K, T[K]>
         : never
     }[keyof T]
   : never
@@ -37,13 +68,49 @@ export type Path<T> = T extends object
  * type Value = ValueAtPath<{ user: { email: string } }, 'user.email'>
  * // string
  */
-export type ValueAtPath<T, P extends string> = P extends `${infer K}.${infer Rest}`
-  ? K extends keyof T
-    ? ValueAtPath<T[K], Rest>
+type ValueAtSegment<T, K extends string> = T extends readonly (infer U)[]
+  ? K extends `${number}`
+    ? U
+    : K extends keyof T
+      ? T[K]
+      : never
+  : K extends keyof T
+    ? T[K]
     : never
-  : P extends keyof T
-  ? T[P]
+
+export type ValueAtPath<T, P extends string> = P extends `${infer K}.${infer Rest}`
+  ? ValueAtPath<ValueAtSegment<T, K>, Rest>
+  : ValueAtSegment<T, P>
+
+/**
+ * Recursively mark form values as read-only.
+ */
+export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends Date | RegExp | Error | Promise<unknown> | WeakMap<object, unknown> | WeakSet<object>
+    ? T
+    : T extends ReadonlyMap<infer Key, infer Value>
+      ? ReadonlyMap<DeepReadonly<Key>, DeepReadonly<Value>>
+      : T extends ReadonlySet<infer Item>
+        ? ReadonlySet<DeepReadonly<Item>>
+        : T extends readonly unknown[]
+          ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+          : T extends object
+            ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+            : T
+
+type ArrayPathFor<T, P extends Path<T>> = P extends unknown
+  ? NonNullable<ValueAtPath<T, P>> extends readonly unknown[]
+    ? P
+    : never
   : never
+
+/**
+ * Extract paths whose values are arrays.
+ */
+export type ArrayPath<T> = ArrayPathFor<T, Path<T>>
+
+type ArrayElement<Value> = Value extends readonly (infer Item)[] ? Item : never
 
 /**
  * Form validation modes
@@ -56,15 +123,29 @@ export type ValidationMode = 'onBlur' | 'onChange' | 'onSubmit' | 'all'
  */
 export type Validator<T, Values = unknown> = (
   value: T,
-  values?: Values
+  values?: Values,
+  context?: ValidationContext<Values>
 ) => string | null | undefined | Promise<string | null | undefined>
+
+/**
+ * Context supplied to field validators.
+ */
+export interface ValidationContext<Values = unknown> {
+  readonly name: string
+  readonly signal: AbortSignal
+  readonly values: DeepReadonly<Values>
+}
 
 /**
  * Form-level validation function
  */
 export type FormValidator<Values> = (
   values: Values
-) => Partial<Record<Path<Values>, string>> | null | undefined
+) =>
+  | Partial<Record<Path<Values>, string>>
+  | null
+  | undefined
+  | Promise<Partial<Record<Path<Values>, string>> | null | undefined>
 
 /**
  * Field validation config
@@ -74,18 +155,35 @@ export type FieldValidation<T, Values = unknown> = Validator<T, Values> | Valida
 /**
  * Nested validation schema matching form structure
  */
-export type ValidationSchema<Values> = {
-  [K in keyof Values]?: Values[K] extends Array<infer U>
-    ? FieldValidation<Values[K], Values> | ValidationSchema<U>
-    : Values[K] extends object
-    ? ValidationSchema<Values[K]> | FieldValidation<Values[K], Values>
-    : FieldValidation<Values[K], Values>
+type ValidationForValue<Value, RootValues extends object> = NonNullable<Value> extends readonly (
+  infer Item
+)[]
+  ?
+      | FieldValidation<Value, RootValues>
+      | (NonNullable<Item> extends PathLeaf
+          ? never
+          : NonNullable<Item> extends object
+            ? ValidationSchema<NonNullable<Item>, RootValues>
+            : never)
+  : NonNullable<Value> extends PathLeaf
+    ? FieldValidation<Value, RootValues>
+    : NonNullable<Value> extends object
+      ?
+          | ValidationSchema<NonNullable<Value>, RootValues>
+          | FieldValidation<Value, RootValues>
+      : FieldValidation<Value, RootValues>
+
+export type ValidationSchema<
+  Values extends object,
+  RootValues extends object = Values,
+> = {
+  [K in keyof Values]?: ValidationForValue<Values[K], RootValues>
 }
 
 /**
  * Form configuration options
  */
-export interface UseFormOptions<Values extends Record<string, unknown>> {
+export interface UseFormOptions<Values extends object> {
   /**
    * Initial values for the form
    * All types will be inferred from this!
@@ -174,12 +272,30 @@ export interface FieldState<T> {
 }
 
 /**
+ * State and operations returned by the bound useField hook.
+ */
+export interface UseFieldReturn<T> extends FieldState<T> {
+  setValue: (value: T) => void
+  setError: (error: string | undefined) => void
+  setTouched: (touched: boolean) => void
+  validate: () => Promise<boolean>
+}
+
+/**
  * Field props for input elements
  */
+export type FieldInputType = 'text' | 'number' | 'checkbox' | 'file' | 'select-multiple'
+
+export type FieldChangeEvent = ChangeEvent<
+  HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+>
+
 export interface FieldProps<T> {
   name: string
-  value: T
-  onChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void
+  value?: T extends string | number | readonly string[] ? T : never
+  checked?: boolean
+  multiple?: boolean
+  onChange: (e: FieldChangeEvent) => void
   onBlur: (e: FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void
 }
 
@@ -216,7 +332,7 @@ export interface FieldRenderProps<T> extends FieldState<T> {
 /**
  * Form state
  */
-export interface FormState<Values extends Record<string, unknown>> {
+export interface FormState<Values extends object> {
   /**
    * Current form values (fully typed!)
    */
@@ -263,10 +379,21 @@ export interface FormState<Values extends Record<string, unknown>> {
   submitCount: number
 }
 
+/** Select one value from the current form state. */
+export type FormStateSelector<Values extends object, Selected> = (
+  state: DeepReadonly<FormState<Values>>
+) => Selected
+
+/** Compare two selector results. */
+export type FormStateEquality<Selected> = (
+  previous: Selected,
+  next: Selected
+) => boolean
+
 /**
  * Form operations
  */
-export interface FormOperations<Values extends Record<string, unknown>> {
+export interface FormOperations<Values extends object> {
   /**
    * Set field value
    */
@@ -311,6 +438,11 @@ export interface FormOperations<Values extends Record<string, unknown>> {
   reset: (values?: Partial<Values>) => void
 
   /**
+   * Run synchronous form updates in one notification transaction.
+   */
+  batch: <Result>(callback: () => Result) => Result
+
+  /**
    * Subscribe to field changes
    */
   subscribe: <P extends Path<Values>>(
@@ -322,24 +454,43 @@ export interface FormOperations<Values extends Record<string, unknown>> {
 /**
  * Return type of useForm hook
  */
-export interface UseFormReturn<Values extends Record<string, unknown>>
+export interface UseFormReturn<Values extends object>
   extends FormState<Values>,
     FormOperations<Values> {
   /**
    * Field component (pre-bound to this form)
    */
-  Field: <P extends Path<Values>>(props: FieldComponentProps<Values, P>) => JSX.Element
+  Field: <P extends Path<Values>>(props: FieldComponentProps<Values, P>) => ReactNode
 
   /**
    * FieldArray component (pre-bound to this form)
    */
-  FieldArray: <P extends Path<Values>>(props: FieldArrayComponentProps<Values, P>) => JSX.Element
+  FieldArray: <P extends ArrayPath<Values>>(
+    props: FieldArrayComponentProps<Values, P>
+  ) => ReactNode
+
+  /**
+   * Subscribe to one field from a component.
+   * Call this hook only at the top level of a React component.
+   */
+  useField: <P extends Path<Values>>(
+    name: P
+  ) => UseFieldReturn<ValueAtPath<Values, P>>
+
+  /**
+   * Subscribe to a selected form-state value from a component.
+   * Call this hook only at the top level of a React component.
+   */
+  useFormState: <Selected>(
+    selector: FormStateSelector<Values, Selected>,
+    isEqual?: FormStateEquality<Selected>
+  ) => Selected
 }
 
 /**
  * Field component props
  */
-export interface FieldComponentProps<Values extends Record<string, unknown>, P extends Path<Values>> {
+export interface FieldComponentProps<Values extends object, P extends Path<Values>> {
   /**
    * Field name (type-safe path)
    */
@@ -348,7 +499,33 @@ export interface FieldComponentProps<Values extends Record<string, unknown>, P e
   /**
    * Render function
    */
-  children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => JSX.Element
+  children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => ReactNode
+
+  /**
+   * How DOM input changes are converted to field values.
+   * @default 'text'
+   */
+  inputType?: FieldInputType
+
+  /**
+   * Override the built-in DOM value parser.
+   */
+  parse?: (event: FieldChangeEvent) => ValueAtPath<Values, P>
+
+  /**
+   * Override the form-level validation mode for this field.
+   */
+  mode?: ValidationMode
+
+  /**
+   * Override the form-level re-validation mode for this field.
+   */
+  reValidateMode?: ValidationMode
+
+  /**
+   * Override the form validation schema for this field.
+   */
+  validate?: Validator<ValueAtPath<Values, P>, Values>
 
   /**
    * Use controlled mode (default: false)
@@ -440,8 +617,8 @@ export interface FieldArrayRenderProps<T> {
  * Field array component props
  */
 export interface FieldArrayComponentProps<
-  Values extends Record<string, unknown>,
-  P extends Path<Values>
+  Values extends object,
+  P extends ArrayPath<Values>
 > {
   /**
    * Field name (must be array path)
@@ -449,14 +626,11 @@ export interface FieldArrayComponentProps<
   name: P
 
   /**
-   * Form store instance
-   */
-  store: FormStore<Values>
-
-  /**
    * Render function
    */
-  children: (props: FieldArrayRenderProps<ValueAtPath<Values, P> extends (infer U)[] ? U : never>) => JSX.Element
+  children: (
+    props: FieldArrayRenderProps<ArrayElement<ValueAtPath<Values, P>>>
+  ) => ReactNode
 }
 
 /**

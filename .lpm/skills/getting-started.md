@@ -13,12 +13,13 @@ globs:
 
 ## Overview
 
-neo.react-forms is a zero-dependency React form library. 7.1 KB gzipped (96% smaller than Formik), 366K+ ops/sec, perfect TypeScript inference from `initialValues`, field-level subscriptions for minimal re-renders, 36 built-in validators, Zod adapter.
+neo.react-forms is a React form library with no runtime dependencies. It infers types from `initialValues`. It provides field subscriptions, built-in validators, and a Zod adapter.
 
 ## Quick Start
 
 ```tsx
-import { useForm, required, email } from '@lpm.dev/neo.react-forms'
+import { useForm } from '@lpm.dev/neo.react-forms'
+import { compose, email, minLength, required } from '@lpm.dev/neo.react-forms/validators'
 
 function SignupForm() {
   const form = useForm({
@@ -27,8 +28,8 @@ function SignupForm() {
       password: '',
     },
     validate: {
-      email: compose(required(), email()),
-      password: compose(required(), minLength(8)),
+      email: compose([required(), email()]),
+      password: compose([required(), minLength(8)]),
     },
     onSubmit: async (values) => {
       await api.signup(values)
@@ -70,12 +71,21 @@ Types are inferred from `initialValues` — no generic parameter needed.
 ```typescript
 const form = useForm({
   // Required: defines form shape and types
-  initialValues: { email: '', age: 0, profile: { name: '' } },
+  initialValues: {
+    email: '',
+    age: 0,
+    password: '',
+    confirmPassword: '',
+    firstName: '',
+    lastName: '',
+    fullName: '',
+    profile: { name: '' },
+  },
 
   // Field-level validation (nested schema matching initialValues shape)
   validate: {
-    email: compose(required(), email()),
-    age: compose(required(), min(18)),
+    email: compose([required(), email()]),
+    age: min(18),
     profile: {
       name: required(),
     },
@@ -130,7 +140,27 @@ form.validate()                // Validate all fields
 form.handleSubmit(event)       // Form submit handler
 form.reset()                   // Reset to initial values
 form.reset({ email: 'new@default.com' })  // Reset with new defaults
+form.batch(() => {             // Send one notification for synchronous updates
+  form.setFieldValue('email', 'user@example.com')
+  form.setFieldTouched('email', true)
+})
 ```
+
+## Subscription Hooks
+
+Call the bound hooks only at the top level of a React component.
+
+```tsx
+const email = form.useField('email')
+const canSubmit = form.useFormState(
+  (state) => state.isValid && state.isDirty && !state.isSubmitting
+)
+
+email.setValue('user@example.com')
+email.setTouched(true)
+```
+
+`useField` subscribes to one field. `useFormState` re-renders the component only when the selected result changes.
 
 ## Field Component
 
@@ -225,12 +255,12 @@ Each field in the array gets a stable `key` for React reconciliation.
 ### String Validators
 
 ```typescript
-import { required, email, url, minLength, maxLength, pattern, alpha, alphanumeric, lowercase, uppercase, trimmed, contains, startsWith, endsWith } from '@lpm.dev/neo.react-forms'
+import { required, email, url, minLength, maxLength, pattern, alpha, alphanumeric, lowercase, uppercase, trimmed, contains, startsWith, endsWith } from '@lpm.dev/neo.react-forms/validators'
 
 required()                    // Non-empty after trim
 required('Custom message')    // Custom error message
 email()                       // Valid email format
-url()                         // Valid URL (uses URL constructor)
+url()                         // Valid HTTP or HTTPS URL
 minLength(3)                  // At least 3 characters
 maxLength(100)                // At most 100 characters
 pattern(/^\d{5}$/, 'Invalid ZIP')  // Custom regex
@@ -239,7 +269,7 @@ pattern(/^\d{5}$/, 'Invalid ZIP')  // Custom regex
 ### Number Validators
 
 ```typescript
-import { min, max, between, integer, positive, negative, nonNegative, nonPositive, safeInteger, finite, multipleOf, even, odd } from '@lpm.dev/neo.react-forms'
+import { min, max, between, integer, positive, negative, nonNegative, nonPositive, safeInteger, finite, multipleOf, even, odd } from '@lpm.dev/neo.react-forms/validators'
 
 min(0)                        // >= 0
 max(100)                      // <= 100
@@ -253,10 +283,10 @@ multipleOf(5)                 // 0, 5, 10, 15, ...
 ### Composition
 
 ```typescript
-import { compose, optional, when, custom, test, oneOf, notOneOf, equals } from '@lpm.dev/neo.react-forms'
+import { compose, optional, when, custom, test, oneOf, notOneOf, equals } from '@lpm.dev/neo.react-forms/validators'
 
 // Chain validators — returns first error
-compose(required(), email(), maxLength(255))
+compose([required(), email(), maxLength(255)])
 
 // Only validate if value exists
 optional(email())  // null/undefined/'' passes
@@ -264,7 +294,7 @@ optional(email())  // null/undefined/'' passes
 // Conditional validation
 when(
   (value, values) => values.hasPhone,
-  compose(required(), pattern(/^\d{10}$/))
+  compose([required(), pattern(/^\d{10}$/)])
 )
 
 // Custom validator
@@ -309,18 +339,33 @@ const form = useForm({
 
 ## Async Validation
 
-```typescript
-import { debounceValidator } from '@lpm.dev/neo.react-forms'
+The context contains the field name, a cancellation signal, and a detached value snapshot. The snapshot has read-only properties.
 
-const checkUsername = debounceValidator(async (value: string) => {
-  const exists = await api.checkUsername(value)
+```typescript
+import type { Validator } from '@lpm.dev/neo.react-forms'
+
+interface SignupValues {
+  username: string
+  organizationId: string
+}
+
+const checkUsername: Validator<string, SignupValues> = async (
+  value,
+  _values,
+  context
+) => {
+  const exists = await api.checkUsername(
+    value,
+    context?.values.organizationId,
+    context?.signal
+  )
   return exists ? 'Username taken' : null
-}, 300)  // 300ms debounce
+}
 
 const form = useForm({
-  initialValues: { username: '' },
+  initialValues: { username: '', organizationId: '' },
   validate: {
-    username: compose(required(), minLength(3), checkUsername),
+    username: checkUsername,
   },
 })
 ```
@@ -351,17 +396,36 @@ const form = useForm({
 import { getFieldAriaProps, getErrorProps, announceValidationError } from '@lpm.dev/neo.react-forms/devtools'
 
 // Generate ARIA attributes
+const errorProps = getErrorProps('email', 'Invalid email', 'signup')
 const ariaProps = getFieldAriaProps({
   name: 'email',
-  error: 'Invalid email',
-  required: true,
-  touched: true,
+  hasError: true,
+  isRequired: true,
+  errorId: errorProps.id,
 })
-// { 'aria-invalid': true, 'aria-required': true, 'aria-describedby': 'email-error' }
+// { 'aria-invalid': true, 'aria-required': true, 'aria-describedby': 'signup-email-error' }
 
 // Screen reader announcements
 announceValidationError('email', 'Invalid email format')
 ```
+
+## DevTools Privacy
+
+Snapshots and debug logs redact common credential fields by default.
+
+```typescript
+import { createFormSnapshot, exposeFormToWindow } from '@lpm.dev/neo.react-forms/devtools'
+
+const snapshot = createFormSnapshot(form, initialValues, {
+  sensitiveFields: ['recoveryPhrase', /^payment\./],
+})
+const cleanup = exposeFormToWindow('signup', snapshot, { enabled: true })
+
+// Call this function when the form unmounts.
+cleanup()
+```
+
+Browser-global exposure is disabled in production by default. Set `includeSensitiveValues: true` only when you accept the disclosure risk.
 
 ## Subpath Imports
 
@@ -385,7 +449,10 @@ import { configureDebug, getFieldAriaProps } from '@lpm.dev/neo.react-forms/devt
 import type {
   UseFormOptions,
   UseFormReturn,
+  UseFieldReturn,
+  DeepReadonly,
   FieldState,
+  FormStateSelector,
   ValidationSchema,
   Validator,
   ValidationMode,

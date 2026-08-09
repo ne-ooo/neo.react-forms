@@ -59,7 +59,7 @@ describe('FieldArray', () => {
       })
 
       const currentItems = store.getValue('items' as any)
-      const newItems = currentItems.filter((_, i) => i !== 1)
+      const newItems = currentItems.filter((_item: string, index: number) => index !== 1)
       store.setValue('items' as any, newItems)
 
       expect(store.getValue('items' as any)).toEqual(['a', 'c'])

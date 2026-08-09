@@ -28,3 +28,9 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# LPM wrapper tree (auto-generated)
+.lpm/wrappers/
+
+# LPM hoisted state (auto-generated)
+.lpm/hoisted/

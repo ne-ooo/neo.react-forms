@@ -1,254 +1,223 @@
 # API Reference
 
-Complete API documentation for @lpm.dev/neo.react-forms
+This document describes the public API for `@lpm.dev/neo.react-forms` version 1.0.0.
 
----
+## Package entry points
 
-## Table of Contents
+```ts
+import { FormStore, useForm } from '@lpm.dev/neo.react-forms'
+import { required, compose } from '@lpm.dev/neo.react-forms/validators'
+import { email } from '@lpm.dev/neo.react-forms/validators/string'
+import { min } from '@lpm.dev/neo.react-forms/validators/number'
+import { optional } from '@lpm.dev/neo.react-forms/validators/compose'
+import { zodAdapter, zodForm } from '@lpm.dev/neo.react-forms/adapters'
+import { configureDebug } from '@lpm.dev/neo.react-forms/devtools'
+```
 
-- [useForm](#useform)
-- [Field Component](#field-component)
-- [FieldArray Component](#fieldarray-component)
-- [Validators](#validators)
-- [Adapters](#adapters)
-- [DevTools](#devtools)
+The root package also exports validators as a namespace.
 
----
+```ts
+import { validators } from '@lpm.dev/neo.react-forms'
 
-## useForm
+validators.required()
+```
 
-Main hook for creating forms.
+## `useForm`
 
-### Signature
+`useForm` creates form state, two bound hooks, and two bound components.
 
-```tsx
-function useForm<Values extends Record<string, unknown>>(
+```ts
+function useForm<Values extends object>(
   options: UseFormOptions<Values>
 ): UseFormReturn<Values>
 ```
 
 ### Options
 
-```tsx
-interface UseFormOptions<Values> {
-  // Initial form values (required)
+```ts
+interface UseFormOptions<Values extends object> {
   initialValues: Values
-
-  // Field-level validation schema
   validate?: ValidationSchema<Values>
-
-  // Form-level validation function
-  validateForm?: (values: Values) => Partial<Record<Path<Values>, string>> | Promise<...>
-
-  // Submit handler (required)
-  onSubmit: (values: Values) => void | Promise<void>
-
-  // Submit error handler
+  validateForm?: FormValidator<Values>
+  onSubmit?: (values: Values) => void | Promise<void>
   onSubmitError?: (error: unknown) => void
-
-  // Validation mode (default: 'onBlur')
-  mode?: 'onBlur' | 'onChange' | 'onSubmit'
-
-  // Re-validation mode (default: 'onChange')
-  reValidateMode?: 'onChange' | 'onBlur'
-
-  // Computed fields
+  mode?: 'onBlur' | 'onChange' | 'onSubmit' | 'all'
+  reValidateMode?: 'onBlur' | 'onChange' | 'onSubmit' | 'all'
   computed?: {
-    [K in Path<Values>]?: (values: Values) => ValueAtPath<Values, K>
+    [K in keyof Values]?: (values: Values) => Values[K]
   }
 }
 ```
 
-### Return Value
+`mode` defaults to `onBlur`. `reValidateMode` defaults to `onChange`.
 
-```tsx
-interface UseFormReturn<Values> {
-  // Current form values
+Computed fields must use top-level keys. Do not create a computed-field cycle.
+
+### Returned state and operations
+
+```ts
+interface UseFormReturn<Values extends object> {
   values: Values
-  initialValues: Values
-
-  // Error state
   errors: Partial<Record<Path<Values>, string>>
   touched: Partial<Record<Path<Values>, boolean>>
-
-  // Form state
   isValid: boolean
   isDirty: boolean
   isSubmitting: boolean
   isSubmitted: boolean
   isValidating: boolean
-  validatingFields: string[]
   submitCount: number
 
-  // Value operations
-  setValue: <P extends Path<Values>>(
+  setFieldValue<P extends Path<Values>>(
     name: P,
     value: ValueAtPath<Values, P>
-  ) => void
-
-  getValue: <P extends Path<Values>>(
-    name: P
-  ) => ValueAtPath<Values, P>
-
-  // Error operations
-  setError: <P extends Path<Values>>(
+  ): void
+  setFieldError<P extends Path<Values>>(
     name: P,
     error: string | undefined
-  ) => void
-
-  getError: <P extends Path<Values>>(
+  ): void
+  setFieldTouched<P extends Path<Values>>(name: P, touched: boolean): void
+  getFieldState<P extends Path<Values>>(
     name: P
-  ) => string | undefined
-
-  // Touched operations
-  setTouched: <P extends Path<Values>>(
+  ): FieldState<ValueAtPath<Values, P>>
+  validateField<P extends Path<Values>>(name: P): Promise<boolean>
+  validate(): Promise<boolean>
+  handleSubmit(event?: FormEvent): Promise<void>
+  reset(values?: Partial<Values>): void
+  batch<Result>(callback: () => Result): Result
+  subscribe<P extends Path<Values>>(
     name: P,
-    touched: boolean
-  ) => void
+    callback: (state: FieldState<ValueAtPath<Values, P>>) => void
+  ): () => void
 
-  getTouched: <P extends Path<Values>>(
+  useField<P extends Path<Values>>(
     name: P
-  ) => boolean
+  ): UseFieldReturn<ValueAtPath<Values, P>>
+  useFormState<Selected>(
+    selector: (state: DeepReadonly<FormState<Values>>) => Selected,
+    isEqual?: (previous: Selected, next: Selected) => boolean
+  ): Selected
 
-  // Validation
-  validateField: <P extends Path<Values>>(
-    name: P
-  ) => Promise<boolean>
-
-  validateForm: () => Promise<boolean>
-
-  // Form operations
-  reset: () => void
-  handleSubmit: (e?: FormEvent) => Promise<void>
-
-  // Components
-  Field: FieldComponent<Values>
-  FieldArray: FieldArrayComponent<Values>
+  Field: BoundFieldComponent<Values>
+  FieldArray: BoundFieldArrayComponent<Values>
 }
 ```
 
-### Example
+Reading form state during render subscribes the owner to that state slice. A bound Field subscribes only to its own field state.
+
+### `form.useField`
+
+Call `form.useField(name)` at the top level of a React component. The hook subscribes only to the specified field.
 
 ```tsx
-const form = useForm({
-  initialValues: {
-    email: '',
-    password: '',
-  },
-  validate: {
-    email: (value) => value.includes('@') ? undefined : 'Invalid email',
-    password: (value) => value.length >= 8 ? undefined : 'Too short',
-  },
-  onSubmit: async (values) => {
-    await api.login(values)
-  },
+const email = form.useField('email')
+
+return (
+  <input
+    value={email.value}
+    onChange={(event) => email.setValue(event.currentTarget.value)}
+    onBlur={() => email.setTouched(true)}
+  />
+)
+```
+
+The hook returns `value`, `error`, `touched`, `dirty`, and `isValidating`. It also returns four typed operations.
+
+```ts
+interface UseFieldReturn<Value> extends FieldState<Value> {
+  setValue(value: Value): void
+  setError(error: string | undefined): void
+  setTouched(touched: boolean): void
+  validate(): Promise<boolean>
+}
+```
+
+### `form.useFormState`
+
+Call `form.useFormState(selector)` at the top level of a React component. The component re-renders only when the selected result changes.
+
+```tsx
+const canSubmit = form.useFormState(
+  (state) => state.isValid && state.isDirty && !state.isSubmitting
+)
+```
+
+The default comparison uses `Object.is`. Supply an equality function when the selector returns a new object.
+
+```tsx
+const status = form.useFormState(
+  (state) => ({ valid: state.isValid, dirty: state.isDirty }),
+  (previous, next) =>
+    previous.valid === next.valid && previous.dirty === next.dirty
+)
+```
+
+### `form.batch`
+
+`form.batch(callback)` groups synchronous updates into one notification transaction. Nested batches also send one final notification.
+
+```ts
+form.batch(() => {
+  form.setFieldValue('country', 'GB')
+  form.setFieldValue('city', 'London')
+  form.setFieldTouched('country', true)
 })
 ```
 
----
+The store also batches reset, validation, and field-array transactions.
 
-## Field Component
-
-Render a form field with automatic subscriptions.
-
-### Props
+## `Field`
 
 ```tsx
-interface FieldProps<Values, P extends Path<Values>> {
-  // Field name (path)
-  name: P
-
-  // Render function
-  children: (props: FieldRenderProps<Values, P>) => ReactNode
-}
-
-interface FieldRenderProps<Values, P extends Path<Values>> {
-  // Field props for input binding
-  field: {
-    name: P
-    value: ValueAtPath<Values, P>
-    onChange: (e: ChangeEvent<HTMLInputElement>) => void
-    onBlur: () => void
-  }
-
-  // Field state
-  value: ValueAtPath<Values, P>
-  error: string | undefined
-  touched: boolean
-  dirty: boolean
-  isValidating: boolean
-
-  // Helper methods
-  setValue: (value: ValueAtPath<Values, P>) => void
-  setError: (error: string | undefined) => void
-  setTouched: (touched: boolean) => void
-}
-```
-
-### Example
-
-```tsx
-<form.Field name="email">
-  {({ field, error, touched }) => (
-    <div>
-      <input {...field} />
-      {touched && error && <span>{error}</span>}
-    </div>
+<form.Field
+  name="age"
+  inputType="number"
+  mode="onChange"
+>
+  {({ props, value, error, touched, dirty, isValidating, setValue }) => (
+    <>
+      <input {...props} type="number" />
+      {touched && error ? <span role="alert">{error}</span> : null}
+      <button type="button" onClick={() => setValue(0)}>
+        Clear
+      </button>
+    </>
   )}
 </form.Field>
 ```
 
----
+Field options are:
 
-## FieldArray Component
+- `name`: A typed field path.
+- `inputType`: `text`, `number`, `checkbox`, `file`, or `select-multiple`.
+- `parse`: A custom DOM event parser.
+- `mode`: A field-level validation mode.
+- `reValidateMode`: A field-level revalidation mode.
+- `validate`: A field-level validator.
 
-Manage dynamic array fields.
+The render function receives `props`. Spread these props on the input. It also receives field state and the `setValue`, `setError`, `setTouched`, and `validate` helpers.
 
-### Props
+## `FieldArray`
 
-```tsx
-interface FieldArrayProps<Values, P extends Path<Values>> {
-  // Array field name (path)
-  name: P
-
-  // Render function
-  children: (props: FieldArrayRenderProps<Values, P>) => ReactNode
-}
-
-interface FieldArrayRenderProps<Values, P extends Path<Values>> {
-  // Array items with stable keys
-  fields: Array<{ key: string; index: number }>
-
-  // Array operations
-  append: (value: ArrayElement<ValueAtPath<Values, P>>) => void
-  prepend: (value: ArrayElement<ValueAtPath<Values, P>>) => void
-  insert: (index: number, value: ArrayElement<ValueAtPath<Values, P>>) => void
-  remove: (index: number) => void
-  move: (from: number, to: number) => void
-  swap: (indexA: number, indexB: number) => void
-  replace: (index: number, value: ArrayElement<ValueAtPath<Values, P>>) => void
-  clear: () => void
-}
-```
-
-### Example
+`FieldArray` accepts only array-valued paths.
 
 ```tsx
 <form.FieldArray name="todos">
-  {({ fields, append, remove }) => (
+  {({ fields, helpers }) => (
     <>
-      {fields.map((field, index) => (
+      {fields.map((field) => (
         <div key={field.key}>
-          <input
-            value={form.values.todos[index].text}
-            onChange={(e) =>
-              form.setValue(`todos.${index}.text`, e.target.value)
-            }
-          />
-          <button onClick={() => remove(index)}>Remove</button>
+          <form.Field name={`todos.${field.index}.text`}>
+            {({ props }) => <input {...props} />}
+          </form.Field>
+          <button type="button" onClick={() => helpers.remove(field.index)}>
+            Remove
+          </button>
         </div>
       ))}
-      <button onClick={() => append({ text: '', done: false })}>
+      <button
+        type="button"
+        onClick={() => helpers.append({ text: '', done: false })}
+      >
         Add
       </button>
     </>
@@ -256,365 +225,274 @@ interface FieldArrayRenderProps<Values, P extends Path<Values>> {
 </form.FieldArray>
 ```
 
----
+Each field item has `key`, `value`, and `index` properties.
+
+```ts
+interface FieldArrayHelpers<T> {
+  append(value: T): void
+  prepend(value: T): void
+  insert(index: number, value: T): void
+  remove(index: number): void
+  move(fromIndex: number, toIndex: number): void
+  swap(indexA: number, indexB: number): void
+  replace(values: T[]): void
+  clear(): void
+}
+```
 
 ## Validators
 
-Built-in validation functions.
+Import validators from the validator entry point.
 
-### String Validators
+```ts
+import { compose, email, required } from '@lpm.dev/neo.react-forms/validators'
+```
 
-```tsx
-// Required field
-required(message?: string): Validator<unknown>
+### Validator type and context
 
-// Email validation
+```ts
+type Validator<T, Values = unknown> = (
+  value: T,
+  values?: Values,
+  context?: ValidationContext<Values>
+) => string | null | undefined | Promise<string | null | undefined>
+
+interface ValidationContext<Values = unknown> {
+  readonly name: string
+  readonly signal: AbortSignal
+  readonly values: DeepReadonly<Values>
+}
+```
+
+Use `context.signal` to stop obsolete asynchronous work.
+
+Each validation run receives one detached value snapshot. The `values` argument and `context.values` reference this snapshot.
+
+The snapshot has read-only TypeScript properties. A mutation cannot change the live form state.
+
+### String validators
+
+```ts
+required(message?: string): Validator<string>
 email(message?: string): Validator<string>
-
-// URL validation
-url(message?: string): Validator<string>
-
-// Min/max length
-minLength(min: number, message?: string): Validator<string>
-maxLength(max: number, message?: string): Validator<string>
-
-// Pattern matching
-pattern(regex: RegExp, message?: string): Validator<string>
-
-// Character types
+url(message?: string, options?: UrlValidatorOptions): Validator<string>
+minLength(minimum: number, message?: string): Validator<string>
+maxLength(maximum: number, message?: string): Validator<string>
+pattern(expression: RegExp, message?: string): Validator<string>
 alphanumeric(message?: string): Validator<string>
 alpha(message?: string): Validator<string>
 lowercase(message?: string): Validator<string>
 uppercase(message?: string): Validator<string>
-
-// String utilities
 trimmed(message?: string): Validator<string>
 contains(substring: string, message?: string): Validator<string>
 startsWith(prefix: string, message?: string): Validator<string>
 endsWith(suffix: string, message?: string): Validator<string>
 ```
 
-### Number Validators
+`url` permits HTTP and HTTPS by default. Configure other protocols explicitly.
 
-```tsx
-// Min/max value
-min(min: number, message?: string): Validator<number>
-max(max: number, message?: string): Validator<number>
-between(min: number, max: number, message?: string): Validator<number>
+```ts
+url('Invalid documentation link', {
+  protocols: ['https', 'mailto'],
+})
+```
 
-// Number types
+`pattern` is deterministic when an expression uses the `g` or `y` flag.
+
+### Number validators
+
+```ts
+min(minimum: number, message?: string): Validator<number>
+max(maximum: number, message?: string): Validator<number>
+between(minimum: number, maximum: number, message?: string): Validator<number>
 integer(message?: string): Validator<number>
-safeInteger(message?: string): Validator<number>
-finite(message?: string): Validator<number>
-
-// Sign validators
 positive(message?: string): Validator<number>
 negative(message?: string): Validator<number>
 nonNegative(message?: string): Validator<number>
 nonPositive(message?: string): Validator<number>
-
-// Math validators
-multipleOf(factor: number, message?: string): Validator<number>
+safeInteger(message?: string): Validator<number>
+finite(message?: string): Validator<number>
+multipleOf(divisor: number, message?: string): Validator<number>
 even(message?: string): Validator<number>
 odd(message?: string): Validator<number>
 ```
 
-### Composition Utilities
+All number validators reject `NaN` and infinity. Range limits must be finite. `multipleOf` throws `RangeError` for zero or a non-finite divisor.
 
-```tsx
-// Combine multiple validators
-compose<T>(...validators: Validator<T>[]): Validator<T>
+### Composition validators
 
-// Optional field (skip validation if empty)
-optional<T>(validator: Validator<T>): Validator<T | undefined>
+```ts
+compose<T, Values>(
+  validators: Validator<T, Values>[]
+): Validator<T, Values>
 
-// Conditional validation
+optional<T, Values>(
+  validator: Validator<T, Values>
+): Validator<T | null | undefined, Values>
+
 when<T, Values>(
-  condition: (value: T, values: Values) => boolean,
+  condition: (
+    value: T,
+    values?: Values,
+    context?: ValidationContext<Values>
+  ) => boolean | Promise<boolean>,
   validator: Validator<T, Values>
 ): Validator<T, Values>
 
-// Custom validator
-custom<T>(
-  validate: (value: T) => string | undefined
-): Validator<T>
-
-// Test function
-test<T>(
-  predicate: (value: T) => boolean,
+custom<T, Values>(validator: Validator<T, Values>): Validator<T, Values>
+test<T, Values>(
+  predicate: (
+    value: T,
+    values?: Values,
+    context?: ValidationContext<Values>
+  ) => boolean | Promise<boolean>,
   message: string
-): Validator<T>
-
-// Enum validators
+): Validator<T, Values>
 oneOf<T>(values: T[], message?: string): Validator<T>
 notOneOf<T>(values: T[], message?: string): Validator<T>
-equals<T>(value: T, message?: string): Validator<T>
+equals<T>(expected: T, message?: string): Validator<T>
 notEquals<T>(value: T, message?: string): Validator<T>
 ```
 
-### Example
+`compose` runs validators in order and returns the first error.
 
-```tsx
-import { compose, required, email, minLength } from '@lpm.dev/neo.react-forms/validators'
+```ts
+compose([required(), email(), maxLength(255)])
+```
 
+`compose`, `optional`, `when`, `custom`, and `test` preserve the validation context.
+
+## Zod adapter
+
+Use `zodAdapter` when you already provide initial values.
+
+```ts
 const form = useForm({
-  initialValues: { email: '', password: '' },
-  validate: {
-    email: compose(required(), email()),
-    password: compose(required(), minLength(8)),
-  },
+  initialValues: { email: '' },
+  validate: zodAdapter(z.object({ email: z.string().email() })),
 })
 ```
 
----
+Use `zodForm` to create both options.
 
-## Adapters
-
-### Zod Adapter
-
-```tsx
-import { zodForm, zodAdapter } from '@lpm.dev/neo.react-forms/adapters'
-import { z } from 'zod'
-
-// Method 1: zodForm (recommended)
+```ts
 const schema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
+  age: z.number().int().min(18),
 })
 
-const form = zodForm({
-  schema,
-  onSubmit: async (values) => {
-    // values is fully typed from schema!
-    await api.signup(values)
-  },
-})
-
-// Method 2: zodAdapter
 const form = useForm({
-  initialValues: { email: '', password: '' },
-  validate: zodAdapter(schema),
+  ...zodForm(schema, { email: '', age: 18 }),
   onSubmit: async (values) => {
-    await api.signup(values)
+    await save(values)
   },
 })
 ```
 
----
+## DevTools privacy
 
-## DevTools
+Import DevTools functions as named exports.
 
-Developer utilities for debugging and accessibility.
+```ts
+import {
+  configureDebug,
+  createFormSnapshot,
+  exposeFormToWindow,
+  logFormState,
+} from '@lpm.dev/neo.react-forms/devtools'
+```
 
-### Debug Mode
+Snapshots and logs redact common secret fields by default. You can add application-specific fields.
 
-```tsx
-import { devtools } from '@lpm.dev/neo.react-forms/devtools'
+```ts
+const snapshot = createFormSnapshot(form, initialValues, {
+  sensitiveFields: ['recoveryPhrase', /^identity\./],
+  redactor: (value, path) => (path === 'email' ? '[EMAIL]' : value),
+})
 
-// Configure debug mode
-devtools.configureDebug({
+logFormState('signup', snapshot)
+```
+
+A string matches an exact path or its final field name. Use a regular expression for a path prefix or another pattern.
+
+Set `includeSensitiveValues: true` only when you accept the disclosure risk.
+
+Browser-global exposure needs explicit enablement. It is disabled in production by default.
+
+```ts
+const cleanup = exposeFormToWindow('signup', snapshot, {
   enabled: true,
-  logValueChanges: true,
-  logValidation: true,
-  logSubmissions: true,
-  logger: console.log, // optional custom logger
 })
 
-// Get current config
-const config = devtools.getDebugConfig()
+cleanup()
 ```
 
-### Enhanced Error Messages
+Set `allowInProduction: true` only for an approved production diagnostic session.
 
-```tsx
-// Enhance error with suggestions
-const enhanced = devtools.enhanceErrorMessage('Invalid email address')
-// {
-//   message: 'Invalid email address',
-//   suggestion: 'Use format: name@example.com',
-//   code: 'INVALID_EMAIL'
-// }
+Debug value logs use the same default redaction rules.
 
-// Format error
-const formatted = devtools.formatError('Invalid email', 'full')
-// 'Invalid email. Suggestion: Use format: name@example.com'
-
-// Pre-made error messages
-devtools.ErrorMessages.required() // 'This field is required'
-devtools.ErrorMessages.email // 'Please enter a valid email address'
-devtools.ErrorMessages.passwordTooShort(8) // 'Password must be at least 8 characters'
+```ts
+configureDebug({
+  enabled: true,
+  sensitiveFields: ['recoveryPhrase'],
+})
 ```
 
-### Accessibility Helpers
+## Accessibility helpers
 
-```tsx
-// Get ARIA props for a field
-const ariaProps = devtools.getFieldAriaProps({
+```ts
+import {
+  announceToScreenReader,
+  generateFieldIds,
+  getErrorProps,
+  getFieldAriaProps,
+  getLabelProps,
+} from '@lpm.dev/neo.react-forms/devtools'
+```
+
+Use a stable form prefix when more than one form can contain the same field name.
+
+```ts
+const ids = generateFieldIds('email', 'signup')
+const labelProps = getLabelProps('email', 'Email', 'signup')
+const errorProps = getErrorProps('email', error, 'signup')
+const fieldProps = getFieldAriaProps({
   name: 'email',
-  hasError: true,
+  hasError: Boolean(error),
   isRequired: true,
-  errorId: 'email-error',
-  descriptionId: 'email-desc',
+  errorId: ids.errorId,
 })
-// {
-//   'aria-invalid': true,
-//   'aria-required': true,
-//   'aria-describedby': 'email-error email-desc'
-// }
-
-// Screen reader announcements
-devtools.announceToScreenReader('Form submitted successfully')
-devtools.announceValidationError('email', 'Invalid email address')
 ```
 
-### DevTools Integration
+`announceToScreenReader` is safe during server rendering. It returns a cleanup function.
 
-```tsx
-// Create form snapshot
-const snapshot = devtools.createFormSnapshot(form, initialValues)
-
-// Expose to DevTools console
-devtools.exposeFormToWindow('signup-form', snapshot)
-// Access in console: window.__NEO_FORMS__['signup-form']
-
-// Log form state
-devtools.logFormState('signup-form', snapshot)
-
-// Diff two snapshots
-const diff = devtools.diffFormState(beforeSnapshot, afterSnapshot)
-// { changedFields, newErrors, clearedErrors, touchedFields }
-
-// Performance monitoring
-const monitor = devtools.createPerformanceMonitor()
-const stopTimer = monitor.startTimer('validation')
-// ... do work
-stopTimer()
-monitor.logMetrics()
+```ts
+const cleanup = announceToScreenReader('Form saved')
+cleanup()
 ```
 
----
+## Type utilities
 
-## Type Utilities
+- `Path<T>` returns valid nested and array paths.
+- `ArrayPath<T>` returns only array-valued paths.
+- `ValueAtPath<T, P>` returns the value type at a path.
+- `ValidationSchema<T>` describes field validation.
 
-### Path<T>
-
-Generate all valid paths for a type:
-
-```tsx
-type User = {
-  name: string
-  profile: {
-    age: number
-    address: {
-      street: string
-    }
-  }
+```ts
+type Values = {
+  users: Array<{ email: string }>
+  tags: readonly string[]
 }
 
-type UserPath = Path<User>
-// 'name' | 'profile' | 'profile.age' | 'profile.address' | 'profile.address.street'
+type AnyPath = Path<Values> // 'users' | 'users.0' | 'users.0.email' | 'tags' | 'tags.0'
+type ArrayOnly = ArrayPath<Values> // 'users' | 'tags'
+type Email = ValueAtPath<Values, 'users.0.email'> // string
 ```
 
-### ValueAtPath<T, P>
+## Release checks
 
-Get the type at a specific path:
-
-```tsx
-type AgeType = ValueAtPath<User, 'profile.age'> // number
-type StreetType = ValueAtPath<User, 'profile.address.street'> // string
+```bash
+lpm run release:check
 ```
 
----
-
-## Complete Example
-
-```tsx
-import { useForm } from '@lpm.dev/neo.react-forms'
-import { compose, required, email, minLength } from '@lpm.dev/neo.react-forms/validators'
-
-function CompleteForm() {
-  const form = useForm({
-    initialValues: {
-      email: '',
-      password: '',
-      confirmPassword: '',
-      tags: [],
-    },
-    validate: {
-      email: compose(required(), email()),
-      password: compose(required(), minLength(8)),
-      confirmPassword: (value, values) =>
-        value === values.password ? undefined : 'Passwords must match',
-    },
-    onSubmit: async (values) => {
-      await api.signup(values)
-    },
-    mode: 'onBlur',
-    reValidateMode: 'onChange',
-  })
-
-  return (
-    <form onSubmit={form.handleSubmit}>
-      <form.Field name="email">
-        {({ field, error, touched }) => (
-          <div>
-            <label>Email</label>
-            <input type="email" {...field} />
-            {touched && error && <span>{error}</span>}
-          </div>
-        )}
-      </form.Field>
-
-      <form.Field name="password">
-        {({ field, error, touched }) => (
-          <div>
-            <label>Password</label>
-            <input type="password" {...field} />
-            {touched && error && <span>{error}</span>}
-          </div>
-        )}
-      </form.Field>
-
-      <form.Field name="confirmPassword">
-        {({ field, error, touched }) => (
-          <div>
-            <label>Confirm Password</label>
-            <input type="password" {...field} />
-            {touched && error && <span>{error}</span>}
-          </div>
-        )}
-      </form.Field>
-
-      <form.FieldArray name="tags">
-        {({ fields, append, remove }) => (
-          <div>
-            <label>Tags</label>
-            {fields.map((field, index) => (
-              <div key={field.key}>
-                <input
-                  value={form.values.tags[index]}
-                  onChange={(e) =>
-                    form.setValue(`tags.${index}`, e.target.value)
-                  }
-                />
-                <button type="button" onClick={() => remove(index)}>
-                  Remove
-                </button>
-              </div>
-            ))}
-            <button type="button" onClick={() => append('')}>
-              Add Tag
-            </button>
-          </div>
-        )}
-      </form.FieldArray>
-
-      <button type="submit" disabled={form.isSubmitting || !form.isValid}>
-        {form.isSubmitting ? 'Submitting...' : 'Submit'}
-      </button>
-
-      {form.isSubmitted && <p>Form submitted successfully!</p>}
-    </form>
-  )
-}
-```
+This command runs source, public, test, benchmark, ESM, and CommonJS checks. It also runs tests, builds, package smoke tests, explicit-GC memory tests, and the release benchmark gate.

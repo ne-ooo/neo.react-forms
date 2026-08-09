@@ -7,6 +7,21 @@
 
 import type { Validator } from '../types.js'
 
+function requireFiniteArgument(value: number, name: string): void {
+  if (!Number.isFinite(value)) {
+    throw new RangeError(`${name} must be a finite number`)
+  }
+}
+
+function isMultiple(value: number, divisor: number): boolean {
+  if (!Number.isFinite(value)) return false
+
+  const quotient = value / divisor
+  const nearestInteger = Math.round(quotient)
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(quotient)) * 8
+  return Math.abs(quotient - nearestInteger) <= tolerance
+}
+
 /**
  * Minimum value validator
  *
@@ -22,8 +37,10 @@ import type { Validator } from '../types.js'
  * ```
  */
 export function min(minValue: number, message?: string): Validator<number> {
+  requireFiniteArgument(minValue, 'minValue')
+
   return (value: number) => {
-    if (value < minValue) {
+    if (!Number.isFinite(value) || value < minValue) {
       return message || `Must be at least ${minValue}`
     }
     return null
@@ -45,8 +62,10 @@ export function min(minValue: number, message?: string): Validator<number> {
  * ```
  */
 export function max(maxValue: number, message?: string): Validator<number> {
+  requireFiniteArgument(maxValue, 'maxValue')
+
   return (value: number) => {
-    if (value > maxValue) {
+    if (!Number.isFinite(value) || value > maxValue) {
       return message || `Must be at most ${maxValue}`
     }
     return null
@@ -69,8 +88,14 @@ export function max(maxValue: number, message?: string): Validator<number> {
  * ```
  */
 export function between(minValue: number, maxValue: number, message?: string): Validator<number> {
+  requireFiniteArgument(minValue, 'minValue')
+  requireFiniteArgument(maxValue, 'maxValue')
+  if (minValue > maxValue) {
+    throw new RangeError('minValue must be less than or equal to maxValue')
+  }
+
   return (value: number) => {
-    if (value < minValue || value > maxValue) {
+    if (!Number.isFinite(value) || value < minValue || value > maxValue) {
       return message || `Must be between ${minValue} and ${maxValue}`
     }
     return null
@@ -114,7 +139,7 @@ export function integer(message = 'Must be a whole number'): Validator<number> {
  */
 export function positive(message = 'Must be positive'): Validator<number> {
   return (value: number) => {
-    if (value <= 0) {
+    if (!Number.isFinite(value) || value <= 0) {
       return message
     }
     return null
@@ -129,7 +154,7 @@ export function positive(message = 'Must be positive'): Validator<number> {
  */
 export function negative(message = 'Must be negative'): Validator<number> {
   return (value: number) => {
-    if (value >= 0) {
+    if (!Number.isFinite(value) || value >= 0) {
       return message
     }
     return null
@@ -144,7 +169,7 @@ export function negative(message = 'Must be negative'): Validator<number> {
  */
 export function nonNegative(message = 'Must be non-negative'): Validator<number> {
   return (value: number) => {
-    if (value < 0) {
+    if (!Number.isFinite(value) || value < 0) {
       return message
     }
     return null
@@ -159,7 +184,7 @@ export function nonNegative(message = 'Must be non-negative'): Validator<number>
  */
 export function nonPositive(message = 'Must be non-positive'): Validator<number> {
   return (value: number) => {
-    if (value > 0) {
+    if (!Number.isFinite(value) || value > 0) {
       return message
     }
     return null
@@ -202,6 +227,7 @@ export function finite(message = 'Must be a finite number'): Validator<number> {
  * @param divisor - The number to divide by
  * @param message - Custom error message
  * @returns Validator function
+ * @throws RangeError if divisor is zero or is not finite
  *
  * @example
  * ```ts
@@ -211,8 +237,13 @@ export function finite(message = 'Must be a finite number'): Validator<number> {
  * ```
  */
 export function multipleOf(divisor: number, message?: string): Validator<number> {
+  requireFiniteArgument(divisor, 'divisor')
+  if (divisor === 0) {
+    throw new RangeError('divisor must not be zero')
+  }
+
   return (value: number) => {
-    if (value % divisor !== 0) {
+    if (!isMultiple(value, divisor)) {
       return message || `Must be a multiple of ${divisor}`
     }
     return null
@@ -237,7 +268,7 @@ export function even(message = 'Must be an even number'): Validator<number> {
  */
 export function odd(message = 'Must be an odd number'): Validator<number> {
   return (value: number) => {
-    if (value % 2 === 0) {
+    if (!Number.isInteger(value) || value % 2 === 0) {
       return message
     }
     return null

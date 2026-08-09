@@ -4,6 +4,9 @@ export default defineConfig({
   entry: [
     'src/index.ts',
     'src/validators/index.ts',
+    'src/validators/string.ts',
+    'src/validators/number.ts',
+    'src/validators/compose.ts',
     'src/adapters/index.ts',
     'src/devtools/index.ts',
   ],

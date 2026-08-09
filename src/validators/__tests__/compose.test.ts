@@ -16,6 +16,7 @@ import {
 } from '../compose.js'
 import { required, minLength } from '../string.js'
 import { min, max } from '../number.js'
+import type { ValidationContext, Validator } from '../../types.js'
 
 describe('Validator Composition', () => {
   describe('compose', () => {
@@ -40,6 +41,28 @@ describe('Validator Composition', () => {
       expect(await validator(101)).toBe('Must be at most 100')
       expect(await validator(50)).toBeNull()
     })
+
+    it('forwards validation context to each validator', async () => {
+      const context: ValidationContext = {
+        name: 'email',
+        signal: new AbortController().signal,
+        values: undefined,
+      }
+      const contexts: Array<ValidationContext | undefined> = []
+      const validators: Validator<string>[] = [
+        (_value, _values, receivedContext) => {
+          contexts.push(receivedContext)
+          return null
+        },
+        (_value, _values, receivedContext) => {
+          contexts.push(receivedContext)
+          return 'Stopped'
+        },
+      ]
+
+      expect(await compose(validators)('value', undefined, context)).toBe('Stopped')
+      expect(contexts).toEqual([context, context])
+    })
   })
 
   describe('optional', () => {
@@ -56,6 +79,23 @@ describe('Validator Composition', () => {
 
       expect(await validator('abc')).toBe('Too short')
       expect(await validator('hello')).toBeNull()
+    })
+
+    it('forwards validation context for non-empty values', async () => {
+      const context: ValidationContext = {
+        name: 'username',
+        signal: new AbortController().signal,
+        values: undefined,
+      }
+      const receivedContexts: Array<ValidationContext | undefined> = []
+      const validator = optional<string>((_value, _values, receivedContext) => {
+        receivedContexts.push(receivedContext)
+        return null
+      })
+
+      await validator('neo', undefined, context)
+
+      expect(receivedContexts).toEqual([context])
     })
   })
 
@@ -85,6 +125,31 @@ describe('Validator Composition', () => {
       expect(await validator('', { usePromo: true, promoCode: '' })).toBeTruthy()
       expect(await validator('', { usePromo: false, promoCode: '' })).toBeNull()
     })
+
+    it('supports async conditions and forwards validation context', async () => {
+      const context: ValidationContext = {
+        name: 'promoCode',
+        signal: new AbortController().signal,
+        values: undefined,
+      }
+      const conditionContexts: Array<ValidationContext | undefined> = []
+      const validatorContexts: Array<ValidationContext | undefined> = []
+      const validator = when<string>(
+        async (_value, _values, receivedContext) => {
+          conditionContexts.push(receivedContext)
+          return true
+        },
+        (_value, _values, receivedContext) => {
+          validatorContexts.push(receivedContext)
+          return null
+        }
+      )
+
+      await validator('SAVE10', undefined, context)
+
+      expect(conditionContexts).toEqual([context])
+      expect(validatorContexts).toEqual([context])
+    })
   })
 
   describe('custom', () => {
@@ -111,6 +176,23 @@ describe('Validator Composition', () => {
       expect(await asyncValidator('invalid')).toBe('Invalid value')
       expect(await asyncValidator('valid')).toBeNull()
     })
+
+    it('preserves the validation context', async () => {
+      const context: ValidationContext = {
+        name: 'password',
+        signal: new AbortController().signal,
+        values: undefined,
+      }
+      let receivedContext: ValidationContext | undefined
+      const validator = custom<string>((_value, _values, currentContext) => {
+        receivedContext = currentContext
+        return undefined
+      })
+
+      await validator('secret', undefined, context)
+
+      expect(receivedContext).toBe(context)
+    })
   })
 
   describe('test', () => {
@@ -136,6 +218,26 @@ describe('Validator Composition', () => {
 
       expect(await validator('abc')).toBe('Too short')
       expect(await validator('hello world')).toBeNull()
+    })
+
+    it('forwards the validation context to the test function', async () => {
+      const context: ValidationContext = {
+        name: 'age',
+        signal: new AbortController().signal,
+        values: undefined,
+      }
+      let receivedContext: ValidationContext | undefined
+      const validator = test<number>(
+        (_value, _values, currentContext) => {
+          receivedContext = currentContext
+          return true
+        },
+        'Invalid'
+      )
+
+      await validator(21, undefined, context)
+
+      expect(receivedContext).toBe(context)
     })
   })
 

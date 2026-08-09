@@ -9,9 +9,11 @@
  * - Uncontrolled mode by default
  */
 
-import { useSyncExternalStore, useCallback, useMemo } from 'react'
+import { useSyncExternalStore, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import type { FormStore } from '../core/store.js'
-import type { Path, ValueAtPath } from '../types.js'
+import type { ArrayPath, ValueAtPath } from '../types.js'
+
+type ArrayElement<Value> = Value extends readonly (infer Item)[] ? Item : never
 
 /**
  * Array field operations helper
@@ -93,7 +95,7 @@ export interface FieldArrayRenderProps<T> {
   helpers: FieldArrayHelpers<T>
 }
 
-export interface FieldArrayProps<Values extends Record<string, unknown>, P extends Path<Values>> {
+export interface FieldArrayProps<Values extends object, P extends ArrayPath<Values>> {
   /**
    * Field name (type-safe path to array field)
    */
@@ -107,13 +109,17 @@ export interface FieldArrayProps<Values extends Record<string, unknown>, P exten
   /**
    * Render function with array fields
    */
-  children: (props: FieldArrayRenderProps<ValueAtPath<Values, P> extends (infer U)[] ? U : never>) => JSX.Element
+  children: (
+    props: FieldArrayRenderProps<ArrayElement<ValueAtPath<Values, P>>>
+  ) => ReactNode
 }
 
 /**
  * Generate stable key for array item
  */
 let keyCounter = 0
+const EMPTY_ARRAY: never[] = []
+
 function generateKey(): string {
   return `field-array-${++keyCounter}-${Date.now()}`
 }
@@ -140,15 +146,15 @@ function generateKey(): string {
  * </FieldArray>
  * ```
  */
-export function FieldArray<Values extends Record<string, unknown>, P extends Path<Values>>({
+export function FieldArray<Values extends object, P extends ArrayPath<Values>>({
   name,
   store,
   children,
-}: FieldArrayProps<Values, P>): JSX.Element {
-  type ArrayItem = ValueAtPath<Values, P> extends (infer U)[] ? U : never
+}: FieldArrayProps<Values, P>): ReactNode {
+  type ArrayItem = ArrayElement<ValueAtPath<Values, P>>
 
-  // Map to store stable keys for array items
-  const keysMapRef = useMemo(() => new Map<number, string>(), [])
+  // Keys move with their logical item rather than remaining attached to an index.
+  const keysRef = useRef<string[]>([])
 
   // Subscribe to array field changes
   const subscribe = useCallback(
@@ -158,112 +164,110 @@ export function FieldArray<Values extends Record<string, unknown>, P extends Pat
     [store, name]
   )
 
-  const getSnapshot = useCallback(() => {
+  const getSnapshot = useCallback((): ArrayItem[] => {
     const value = store.getFieldState(name).value as unknown
-    return Array.isArray(value) ? value : []
+    return Array.isArray(value) ? value as ArrayItem[] : EMPTY_ARRAY
   }, [store, name])
 
-  const arrayValue = useSyncExternalStore(subscribe, getSnapshot) as ArrayItem[]
+  const arrayValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  while (keysRef.current.length < arrayValue.length) {
+    keysRef.current.push(generateKey())
+  }
+  if (keysRef.current.length > arrayValue.length) {
+    keysRef.current.length = arrayValue.length
+  }
 
   // Generate stable keys for array items
   const fields: FieldArrayItem<ArrayItem>[] = useMemo(() => {
     return arrayValue.map((value, index) => {
-      // Reuse existing key if available, otherwise generate new one
-      let key = keysMapRef.get(index)
-      if (!key) {
-        key = generateKey()
-        keysMapRef.set(index, key)
-      }
-
       return {
-        key,
+        key: keysRef.current[index] ?? generateKey(),
         value,
         index,
       }
     })
-  }, [arrayValue, keysMapRef])
-
-  // Clear unused keys (keep map size bounded)
-  useMemo(() => {
-    const currentIndices = new Set(arrayValue.map((_, i) => i))
-    for (const index of keysMapRef.keys()) {
-      if (!currentIndices.has(index)) {
-        keysMapRef.delete(index)
-      }
-    }
-  }, [arrayValue, keysMapRef])
+  }, [arrayValue])
 
   // Array operation helpers
   const helpers: FieldArrayHelpers<ArrayItem> = useMemo(
     () => ({
       append: (value: ArrayItem) => {
         const newArray = [...arrayValue, value]
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
+        const newToOld = arrayValue.map((_, index) => index) as Array<number | undefined>
+        newToOld.push(undefined)
+        keysRef.current.push(generateKey())
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       prepend: (value: ArrayItem) => {
         const newArray = [value, ...arrayValue]
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
-        // Shift all keys down
-        const newKeysMap = new Map<number, string>()
-        for (const [index, key] of keysMapRef.entries()) {
-          newKeysMap.set(index + 1, key)
-        }
-        keysMapRef.clear()
-        for (const [index, key] of newKeysMap.entries()) {
-          keysMapRef.set(index, key)
-        }
+        const newToOld = [
+          undefined,
+          ...arrayValue.map((_, index) => index),
+        ]
+        keysRef.current.unshift(generateKey())
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       insert: (index: number, value: ArrayItem) => {
+        const targetIndex = Math.max(0, Math.min(index, arrayValue.length))
         const newArray = [...arrayValue]
-        newArray.splice(index, 0, value)
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
-        // Shift keys at and after insertion point
-        const newKeysMap = new Map<number, string>()
-        for (const [i, key] of keysMapRef.entries()) {
-          newKeysMap.set(i >= index ? i + 1 : i, key)
-        }
-        keysMapRef.clear()
-        for (const [i, key] of newKeysMap.entries()) {
-          keysMapRef.set(i, key)
-        }
+        newArray.splice(targetIndex, 0, value)
+        const newToOld = arrayValue.map((_, oldIndex) => oldIndex) as Array<
+          number | undefined
+        >
+        newToOld.splice(targetIndex, 0, undefined)
+        keysRef.current.splice(targetIndex, 0, generateKey())
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       remove: (index: number) => {
+        if (index < 0 || index >= arrayValue.length) return
         const newArray = arrayValue.filter((_, i) => i !== index)
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
-        // Shift keys after removal point
-        keysMapRef.delete(index)
-        const newKeysMap = new Map<number, string>()
-        for (const [i, key] of keysMapRef.entries()) {
-          newKeysMap.set(i > index ? i - 1 : i, key)
+        const newToOld: number[] = []
+        for (let oldIndex = 0; oldIndex < arrayValue.length; oldIndex++) {
+          if (oldIndex !== index) newToOld.push(oldIndex)
         }
-        keysMapRef.clear()
-        for (const [i, key] of newKeysMap.entries()) {
-          keysMapRef.set(i, key)
-        }
+        keysRef.current.splice(index, 1)
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       move: (fromIndex: number, toIndex: number) => {
+        if (
+          fromIndex < 0 ||
+          fromIndex >= arrayValue.length ||
+          toIndex < 0 ||
+          toIndex >= arrayValue.length ||
+          fromIndex === toIndex
+        ) {
+          return
+        }
+
         const newArray = [...arrayValue]
         const [item] = newArray.splice(fromIndex, 1)
         if (item !== undefined) {
           newArray.splice(toIndex, 0, item)
         }
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
-        // Swap keys
-        const fromKey = keysMapRef.get(fromIndex)
-        const toKey = keysMapRef.get(toIndex)
-        if (fromKey) {
-          keysMapRef.set(toIndex, fromKey)
-        }
-        if (toKey) {
-          keysMapRef.set(fromIndex, toKey)
-        }
+        const newToOld = arrayValue.map((_, oldIndex) => oldIndex)
+        const [oldIndex] = newToOld.splice(fromIndex, 1)
+        const [key] = keysRef.current.splice(fromIndex, 1)
+        if (oldIndex !== undefined) newToOld.splice(toIndex, 0, oldIndex)
+        if (key !== undefined) keysRef.current.splice(toIndex, 0, key)
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       swap: (indexA: number, indexB: number) => {
+        if (
+          indexA < 0 ||
+          indexA >= arrayValue.length ||
+          indexB < 0 ||
+          indexB >= arrayValue.length ||
+          indexA === indexB
+        ) {
+          return
+        }
+
         const newArray = [...arrayValue]
         const temp = newArray[indexA]
         const itemB = newArray[indexB]
@@ -271,29 +275,30 @@ export function FieldArray<Values extends Record<string, unknown>, P extends Pat
           newArray[indexA] = itemB
           newArray[indexB] = temp
         }
-        store.setValue(name, newArray as ValueAtPath<Values, P>)
-        // Swap keys
-        const keyA = keysMapRef.get(indexA)
-        const keyB = keysMapRef.get(indexB)
-        if (keyA && keyB) {
-          keysMapRef.set(indexA, keyB)
-          keysMapRef.set(indexB, keyA)
-        }
+        const newToOld = arrayValue.map((_, oldIndex) => oldIndex)
+        ;[newToOld[indexA], newToOld[indexB]] = [newToOld[indexB]!, newToOld[indexA]!]
+        ;[keysRef.current[indexA], keysRef.current[indexB]] = [
+          keysRef.current[indexB]!,
+          keysRef.current[indexA]!,
+        ]
+        store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       replace: (values: ArrayItem[]) => {
-        store.setValue(name, values as ValueAtPath<Values, P>)
-        // Clear all keys (new array)
-        keysMapRef.clear()
+        keysRef.current = values.map(() => generateKey())
+        store.setArrayValue(
+          name,
+          values as ValueAtPath<Values, P>,
+          values.map(() => undefined)
+        )
       },
 
       clear: () => {
-        store.setValue(name, [] as ValueAtPath<Values, P>)
-        // Clear all keys
-        keysMapRef.clear()
+        keysRef.current = []
+        store.setArrayValue(name, [] as ValueAtPath<Values, P>, [])
       },
     }),
-    [arrayValue, store, name, keysMapRef]
+    [arrayValue, store, name]
   )
 
   const renderProps: FieldArrayRenderProps<ArrayItem> = {

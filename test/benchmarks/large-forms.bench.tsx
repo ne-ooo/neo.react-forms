@@ -4,12 +4,12 @@
  * Tests performance with 30, 100, and 500 field forms
  */
 
-import { bench, describe } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
-import { useForm as useNeoForm } from '../src/hooks/useForm.js'
-import { useForm as useFormikForm } from 'formik'
+import { describe } from 'vitest'
+import { renderHook, act, cleanup } from '@testing-library/react'
+import { useForm as useNeoForm } from '../../src/hooks/useForm.js'
+import { useFormik as useFormikForm } from 'formik'
 import { useForm as useRHF } from 'react-hook-form'
-import { generateFormData } from './utils/benchmark-helpers.js'
+import { benchmark as bench, generateFormData } from './utils/benchmark-helpers.js'
 
 describe('Large Forms: 30 Fields', () => {
   const data = generateFormData(30)
@@ -20,7 +20,7 @@ describe('Large Forms: 30 Fields', () => {
         initialValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('Formik: Create 30-field form', () => {
@@ -30,7 +30,7 @@ describe('Large Forms: 30 Fields', () => {
         onSubmit: () => {},
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('React Hook Form: Create 30-field form', () => {
@@ -39,44 +39,56 @@ describe('Large Forms: 30 Fields', () => {
         defaultValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('neo.react-forms: Update field in 30-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useNeoForm({
         initialValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field15', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setFieldValue('field15', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('Formik: Update field in 30-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useFormikForm({
         initialValues: data,
         onSubmit: () => {},
       })
     )
 
-    act(() => {
-      result.current.setFieldValue('field15', 'new value')
-    })
+    try {
+      act(() => {
+        void result.current.setFieldValue('field15', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('React Hook Form: Update field in 30-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useRHF({
         defaultValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field15', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setValue('field15', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 })
 
@@ -89,7 +101,7 @@ describe('Large Forms: 100 Fields', () => {
         initialValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('Formik: Create 100-field form', () => {
@@ -99,7 +111,7 @@ describe('Large Forms: 100 Fields', () => {
         onSubmit: () => {},
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('React Hook Form: Create 100-field form', () => {
@@ -108,48 +120,60 @@ describe('Large Forms: 100 Fields', () => {
         defaultValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('neo.react-forms: Update field in 100-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useNeoForm({
         initialValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field50', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setFieldValue('field50', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('Formik: Update field in 100-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useFormikForm({
         initialValues: data,
         onSubmit: () => {},
       })
     )
 
-    act(() => {
-      result.current.setFieldValue('field50', 'new value')
-    })
+    try {
+      act(() => {
+        void result.current.setFieldValue('field50', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('React Hook Form: Update field in 100-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useRHF({
         defaultValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field50', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setValue('field50', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
-  bench('neo.react-forms: Validate 100 fields', () => {
-    const { result } = renderHook(() =>
+  bench('neo.react-forms: Validate 100 fields', async () => {
+    const { result, unmount } = renderHook(() =>
       useNeoForm({
         initialValues: data,
         validate: Object.keys(data).reduce((acc, key) => ({
@@ -159,13 +183,17 @@ describe('Large Forms: 100 Fields', () => {
       })
     )
 
-    act(() => {
-      result.current.validateForm()
-    })
+    try {
+      await act(async () => {
+        await result.current.validate()
+      })
+    } finally {
+      cleanup()
+    }
   })
 
-  bench('Formik: Validate 100 fields', () => {
-    const { result } = renderHook(() =>
+  bench('Formik: Validate 100 fields', async () => {
+    const { result, unmount } = renderHook(() =>
       useFormikForm({
         initialValues: data,
         onSubmit: () => {},
@@ -181,22 +209,30 @@ describe('Large Forms: 100 Fields', () => {
       })
     )
 
-    act(() => {
-      result.current.validateForm()
-    })
+    try {
+      await act(async () => {
+        await result.current.validateForm()
+      })
+    } finally {
+      cleanup()
+    }
   })
 
-  bench('React Hook Form: Validate 100 fields', () => {
-    const { result } = renderHook(() =>
+  bench('React Hook Form: Validate 100 fields', async () => {
+    const { result, unmount } = renderHook(() =>
       useRHF({
         defaultValues: data,
         mode: 'onChange',
       })
     )
 
-    act(() => {
-      result.current.trigger()
-    })
+    try {
+      await act(async () => {
+        await result.current.trigger()
+      })
+    } finally {
+      cleanup()
+    }
   })
 })
 
@@ -209,7 +245,7 @@ describe('Large Forms: 500 Fields', () => {
         initialValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('Formik: Create 500-field form', () => {
@@ -219,7 +255,7 @@ describe('Large Forms: 500 Fields', () => {
         onSubmit: () => {},
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('React Hook Form: Create 500-field form', () => {
@@ -228,91 +264,115 @@ describe('Large Forms: 500 Fields', () => {
         defaultValues: data,
       })
     )
-    unmount()
+    cleanup()
   })
 
   bench('neo.react-forms: Update field in 500-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useNeoForm({
         initialValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field250', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setFieldValue('field250', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('Formik: Update field in 500-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useFormikForm({
         initialValues: data,
         onSubmit: () => {},
       })
     )
 
-    act(() => {
-      result.current.setFieldValue('field250', 'new value')
-    })
+    try {
+      act(() => {
+        void result.current.setFieldValue('field250', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('React Hook Form: Update field in 500-field form', () => {
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useRHF({
         defaultValues: data,
       })
     )
 
-    act(() => {
-      result.current.setValue('field250', 'new value')
-    })
+    try {
+      act(() => {
+        result.current.setValue('field250', 'new value')
+      })
+    } finally {
+      cleanup()
+    }
   })
 })
 
 describe('Large Forms: Sequential Updates', () => {
   bench('neo.react-forms: 30 sequential updates', () => {
     const data = generateFormData(30)
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useNeoForm({
         initialValues: data,
       })
     )
 
-    act(() => {
-      for (let i = 0; i < 30; i++) {
-        result.current.setValue(`field${i}` as any, `value-${i}`)
-      }
-    })
+    try {
+      act(() => {
+        for (let i = 0; i < 30; i++) {
+          result.current.setFieldValue(`field${i}`, `value-${i}`)
+        }
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('Formik: 30 sequential updates', () => {
     const data = generateFormData(30)
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useFormikForm({
         initialValues: data,
         onSubmit: () => {},
       })
     )
 
-    act(() => {
-      for (let i = 0; i < 30; i++) {
-        result.current.setFieldValue(`field${i}`, `value-${i}`)
-      }
-    })
+    try {
+      act(() => {
+        for (let i = 0; i < 30; i++) {
+          void result.current.setFieldValue(`field${i}`, `value-${i}`)
+        }
+      })
+    } finally {
+      cleanup()
+    }
   })
 
   bench('React Hook Form: 30 sequential updates', () => {
     const data = generateFormData(30)
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useRHF({
         defaultValues: data,
       })
     )
 
-    act(() => {
-      for (let i = 0; i < 30; i++) {
-        result.current.setValue(`field${i}` as any, `value-${i}`)
-      }
-    })
+    try {
+      act(() => {
+        for (let i = 0; i < 30; i++) {
+          result.current.setValue(`field${i}`, `value-${i}`)
+        }
+      })
+    } finally {
+      cleanup()
+    }
   })
 })
