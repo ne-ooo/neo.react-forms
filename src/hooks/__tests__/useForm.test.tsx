@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useForm } from '../useForm.js'
+import type { Validator } from '../../types.js'
 
 describe('useForm', () => {
   describe('initialization', () => {
@@ -545,6 +546,52 @@ describe('useForm', () => {
       })
 
       expect(event.preventDefault).toHaveBeenCalled()
+    })
+  })
+
+  describe('validator context', () => {
+    it('supplies a detached and read-only value snapshot', async () => {
+      interface ContextValues {
+        email: string
+        profile: { name: string }
+        createdAt: Date
+      }
+
+      const createdAt = new Date('2026-01-01T00:00:00.000Z')
+      const validator: Validator<string, ContextValues> = vi.fn((_value, values, context) => {
+        expect(context?.name).toBe('email')
+        expect(context?.signal).toBeInstanceOf(AbortSignal)
+        expect(context?.values).toBe(values)
+        expect(Object.isFrozen(context?.values)).toBe(true)
+        expect(Object.isFrozen(context?.values.profile)).toBe(true)
+
+        expect(() => {
+          ;(values as { profile: { name: string } }).profile.name = 'Changed'
+        }).toThrow()
+        context?.values.createdAt.setUTCFullYear(2030)
+        return undefined
+      })
+
+      const { result } = renderHook(() =>
+        useForm({
+          initialValues: {
+            email: 'user@example.com',
+            profile: { name: 'Ada' },
+            createdAt,
+          },
+          validate: { email: validator },
+        })
+      )
+
+      await act(async () => {
+        expect(await result.current.validateField('email')).toBe(true)
+      })
+
+      expect(validator).toHaveBeenCalledTimes(1)
+      expect(result.current.values.profile.name).toBe('Ada')
+      expect(result.current.values.createdAt.toISOString()).toBe(
+        '2026-01-01T00:00:00.000Z'
+      )
     })
   })
 

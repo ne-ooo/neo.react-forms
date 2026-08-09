@@ -1,15 +1,14 @@
 # Migrating from React Hook Form to neo.react-forms
 
-Quick migration guide from React Hook Form (RHF) to @lpm.dev/neo.react-forms.
+Use this guide to migrate a React Hook Form form to `@lpm.dev/neo.react-forms`.
 
 ---
 
 ## Why Migrate?
 
-- ⚡ **27-115% faster** for large forms
-- 📦 **83% smaller bundle** (7.1 KB vs 12.1 KB)
-- 🎯 **Better TypeScript** inference (no manual generics)
-- ✅ **More intuitive API**
+- Infer form paths and values from `initialValues`.
+- Use field subscriptions and render props.
+- Use built-in validators or the optional Zod adapter.
 
 ---
 
@@ -17,19 +16,19 @@ Quick migration guide from React Hook Form (RHF) to @lpm.dev/neo.react-forms.
 
 | React Hook Form | neo.react-forms |
 |-----------------|-----------------|
-| \`useForm()\` | \`useForm()\` |
-| \`register('field')\` | \`<form.Field name="field">\` |
-| \`setValue('field', val)\` | \`setValue('field', val)\` |
-| \`watch('field')\` | \`form.values.field\` |
-| \`formState.errors\` | \`form.errors\` |
-| \`handleSubmit(fn)\` | \`handleSubmit\` |
+| `useForm()` | `useForm()` |
+| `register('field')` | `<form.Field name="field">` |
+| `setValue('field', val)` | `setFieldValue('field', val)` |
+| `watch('field')` | `form.values.field` |
+| `formState.errors` | `form.errors` |
+| `handleSubmit(fn)` | `handleSubmit` |
 
 ---
 
 ## Basic Migration
 
 **Before (RHF):**
-\`\`\`tsx
+```tsx
 import { useForm } from 'react-hook-form'
 
 function Form() {
@@ -48,10 +47,10 @@ function Form() {
     </form>
   )
 }
-\`\`\`
+```
 
 **After (neo.react-forms):**
-\`\`\`tsx
+```tsx
 import { useForm } from '@lpm.dev/neo.react-forms'
 
 function Form() {
@@ -70,9 +69,9 @@ function Form() {
   return (
     <form onSubmit={form.handleSubmit}>
       <form.Field name="email">
-        {({ field, error }) => (
+        {({ props, error }) => (
           <>
-            <input {...field} />
+            <input {...props} />
             {error && <span>{error}</span>}
           </>
         )}
@@ -81,7 +80,7 @@ function Form() {
     </form>
   )
 }
-\`\`\`
+```
 
 ---
 
@@ -89,33 +88,32 @@ function Form() {
 
 ### 1. Field Registration
 
-**RHF:** Uses \`register()\` refs
-**neo.react-forms:** Uses \`<Field>\` components with subscriptions
+**RHF:** Uses `register()` refs
+**neo.react-forms:** Uses `<Field>` components with subscriptions
 
 ### 2. TypeScript
 
-**RHF:** Requires manual types: \`useForm<MyFormData>()\`
-**neo.react-forms:** Infers from \`initialValues\` automatically
+**RHF:** Requires manual types: `useForm<MyFormData>()`
+**neo.react-forms:** Infers from `initialValues` automatically
 
 ### 3. Validation
 
 **RHF:** Inline validation rules
-**neo.react-forms:** Separate \`validate\` object (cleaner)
+**neo.react-forms:** Separate `validate` object (cleaner)
 
 ### 4. Performance
 
-**RHF:** 100k ops/sec, uses refs
-**neo.react-forms:** 366k ops/sec, field-level subscriptions
+React Hook Form uses refs. neo.react-forms uses field-level subscriptions. Measure equivalent work in your application.
 
 ---
 
 ## Migration Checklist
 
-- [ ] Replace \`register()\` with \`<form.Field>\`
-- [ ] Change \`defaultValues\` to \`initialValues\`
-- [ ] Move inline validation to \`validate\` object
-- [ ] Replace \`formState.errors\` with \`form.errors\`
-- [ ] Update \`handleSubmit\` usage
+- [ ] Replace `register()` with `<form.Field>`
+- [ ] Change `defaultValues` to `initialValues`
+- [ ] Move inline validation to `validate` object
+- [ ] Replace `formState.errors` with `form.errors`
+- [ ] Update `handleSubmit` usage
 - [ ] Remove manual TypeScript generics
 
 ---

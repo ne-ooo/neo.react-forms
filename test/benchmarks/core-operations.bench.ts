@@ -5,9 +5,9 @@
  * for basic form operations
  */
 
-import { bench, describe } from 'vitest'
-import { FormStore } from '../src/core/store.js'
-import { generateFormData } from './utils/benchmark-helpers.js'
+import { describe } from 'vitest'
+import { FormStore } from '../../src/core/store.js'
+import { benchmark as bench, generateFormData } from './utils/benchmark-helpers.js'
 
 // Note: Formik and RHF are React components, so we benchmark
 // the core store operations which are framework-agnostic

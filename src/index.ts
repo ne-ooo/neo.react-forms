@@ -1,8 +1,7 @@
 /**
  * @lpm.dev/neo.react-forms
  *
- * Modern, performant React form library
- * - 78% smaller than Formik (< 10KB vs 44.7KB)
+ * Typed React form library
  * - Perfect TypeScript inference from initialValues
  * - Field-level subscriptions for isolated re-renders
  * - Zero runtime dependencies
@@ -16,8 +15,11 @@ export { useForm } from './hooks/useForm.js'
 export type {
   // Core types
   Path,
+  ArrayPath,
   ValueAtPath,
+  DeepReadonly,
   ValidationMode,
+  ValidationContext,
   Validator,
   FormValidator,
   FieldValidation,
@@ -31,9 +33,14 @@ export type {
 
   // Field types
   FieldState,
+  UseFieldReturn,
   FieldProps,
+  FieldInputType,
+  FieldChangeEvent,
   FieldRenderProps,
   FieldComponentProps,
+  FormStateSelector,
+  FormStateEquality,
 
   // Field array types
   FieldArrayItem,

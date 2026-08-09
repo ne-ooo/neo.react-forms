@@ -19,7 +19,9 @@ describe('debounce', () => {
     const debounced = debounce(fn, 300)
 
     const promise1 = debounced('hello')
+    const cancelled1 = expect(promise1).rejects.toThrow('Debounced call cancelled')
     const promise2 = debounced('world')
+    const cancelled2 = expect(promise2).rejects.toThrow('Debounced call cancelled')
     const promise3 = debounced('test')
 
     // Only last call should execute
@@ -33,14 +35,17 @@ describe('debounce', () => {
 
     const result = await promise3
     expect(result).toBe('TEST')
+    await Promise.all([cancelled1, cancelled2])
   })
 
   it('should cancel previous calls', async () => {
     const fn = vi.fn(async (value: number) => value * 2)
     const debounced = debounce(fn, 200)
 
-    debounced(1)
-    debounced(2)
+    const promise1 = debounced(1)
+    const cancelled1 = expect(promise1).rejects.toThrow('Debounced call cancelled')
+    const promise2 = debounced(2)
+    const cancelled2 = expect(promise2).rejects.toThrow('Debounced call cancelled')
     const promise = debounced(3)
 
     vi.advanceTimersByTime(200)
@@ -49,6 +54,7 @@ describe('debounce', () => {
     const result = await promise
     expect(result).toBe(6)
     expect(fn).toHaveBeenCalledTimes(1)
+    await Promise.all([cancelled1, cancelled2])
   })
 
   it('should handle multiple debounce windows', async () => {
@@ -75,12 +81,13 @@ describe('debounce', () => {
     const debounced = debounce(fn, 200)
 
     const promise = debounced('test')
+    const cancelled = expect(promise).rejects.toThrow('Debounced call cancelled')
     debounced.cancel()
 
     vi.advanceTimersByTime(200)
     await vi.runAllTimersAsync()
 
-    await expect(promise).rejects.toThrow('Debounced call cancelled')
+    await cancelled
     expect(fn).not.toHaveBeenCalled()
   })
 
@@ -91,11 +98,12 @@ describe('debounce', () => {
     const debounced = debounce(fn, 100)
 
     const promise = debounced()
+    const rejection = expect(promise).rejects.toThrow('Test error')
 
     vi.advanceTimersByTime(100)
     await vi.runAllTimersAsync()
 
-    await expect(promise).rejects.toThrow('Test error')
+    await rejection
   })
 
   it('should preserve this context', async () => {
@@ -133,7 +141,9 @@ describe('debounceValidator', () => {
     const debounced = debounceValidator(validator, 200)
 
     const promise1 = debounced('a')
+    const cancelled1 = expect(promise1).rejects.toThrow('Debounced call cancelled')
     const promise2 = debounced('ab')
+    const cancelled2 = expect(promise2).rejects.toThrow('Debounced call cancelled')
     const promise3 = debounced('abc')
 
     vi.advanceTimersByTime(200)
@@ -143,6 +153,7 @@ describe('debounceValidator', () => {
     expect(result).toBeNull()
     expect(validator).toHaveBeenCalledTimes(1)
     expect(validator).toHaveBeenCalledWith('abc')
+    await Promise.all([cancelled1, cancelled2])
   })
 
   it('should return validation errors', async () => {

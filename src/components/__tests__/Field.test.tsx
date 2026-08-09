@@ -215,7 +215,11 @@ describe('Field', () => {
       fireEvent.change(input, { target: { value: 'test@example.com' } })
 
       await waitFor(() => {
-        expect(validate).toHaveBeenCalledWith('test@example.com')
+        expect(validate).toHaveBeenCalledWith(
+          'test@example.com',
+          { email: 'test@example.com' },
+          expect.objectContaining({ name: 'email' })
+        )
       })
 
       await waitFor(() => {
@@ -331,6 +335,29 @@ describe('Field', () => {
       await waitFor(() => {
         expect(store.getError('email')).toBe('Required')
       })
+    })
+
+    it('provides immutable form values to a field validator', async () => {
+      const store = new FormStore({ email: '', profile: { name: 'Ada' } })
+      const validate = vi.fn((_value, values, context) => {
+        expect(context?.name).toBe('email')
+        expect(context?.values).toBe(values)
+        expect(Object.isFrozen(context?.values.profile)).toBe(true)
+        return undefined
+      })
+
+      render(
+        <Field name="email" store={store} validate={validate}>
+          {(field) => (
+            <button data-testid="validate-context" onClick={() => field.validate()}>
+              Validate
+            </button>
+          )}
+        </Field>
+      )
+
+      fireEvent.click(screen.getByTestId('validate-context'))
+      await waitFor(() => expect(validate).toHaveBeenCalledTimes(1))
     })
   })
 })

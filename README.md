@@ -1,187 +1,215 @@
 # @lpm.dev/neo.react-forms
 
-**The fastest, smallest, and most performant React form library.**
+A typed React form library with field subscriptions, built-in validators, and an optional Zod adapter.
 
----
+## Install
 
-## Why neo.react-forms?
-
-- ⚡ **Blazing Fast**: 366,000+ ops/sec, 27-115% faster than alternatives
-- 📦 **Tiny Bundle**: 7.1 KB gzipped (96% smaller than Formik, 83% smaller than RHF)
-- 🎯 **Perfect TypeScript**: Zero manual generics, full path autocomplete
-- 🔒 **Zero Dependencies**: No runtime dependencies
-- 🎨 **Zero Re-renders**: Perfect field isolation with \`useSyncExternalStore\`
-- 🌳 **Tree-Shakeable**: Import only what you need
-- ✅ **Comprehensive**: 36 built-in validators, Zod adapter, DevTools
-- 💾 **Memory Efficient**: Zero memory leaks, < 10 MB for 100+ field forms
-
----
-
-## Quick Start
-
-### Installation
+Use LPM to install the package:
 
 ```bash
 lpm install @lpm.dev/neo.react-forms
 ```
 
-### Basic Example
+React 18 and React 19 are supported. Zod is an optional peer dependency.
+
+## Create a form
 
 ```tsx
-import { useForm } from "@lpm.dev/neo.react-forms";
+import { useForm } from '@lpm.dev/neo.react-forms'
+import {
+  compose,
+  email,
+  minLength,
+  required,
+} from '@lpm.dev/neo.react-forms/validators'
 
 function SignupForm() {
   const form = useForm({
     initialValues: {
-      email: "",
-      password: "",
+      email: '',
+      password: '',
     },
     validate: {
-      email: (value) => (value.includes("@") ? undefined : "Invalid email"),
-      password: (value) => (value.length >= 8 ? undefined : "Too short"),
+      email: compose([required(), email()]),
+      password: compose([required(), minLength(8)]),
     },
     onSubmit: async (values) => {
-      await api.signup(values);
+      await api.signup(values)
     },
-  });
+  })
 
   return (
     <form onSubmit={form.handleSubmit}>
       <form.Field name="email">
-        {({ field, error, touched }) => (
+        {({ props, error, touched }) => (
           <div>
-            <input type="email" {...field} />
-            {touched && error && <span>{error}</span>}
+            <label htmlFor="signup-email">Email</label>
+            <input {...props} id="signup-email" type="email" />
+            {touched && error ? <span role="alert">{error}</span> : null}
           </div>
         )}
       </form.Field>
 
       <form.Field name="password">
-        {({ field, error, touched }) => (
+        {({ props, error, touched }) => (
           <div>
-            <input type="password" {...field} />
-            {touched && error && <span>{error}</span>}
+            <label htmlFor="signup-password">Password</label>
+            <input {...props} id="signup-password" type="password" />
+            {touched && error ? <span role="alert">{error}</span> : null}
           </div>
         )}
       </form.Field>
 
       <button type="submit" disabled={form.isSubmitting}>
-        Sign Up
+        Sign up
       </button>
     </form>
-  );
+  )
 }
 ```
 
----
+TypeScript infers the form type from `initialValues`.
 
-## Features
-
-### 🎯 Perfect TypeScript Inference
-
-**Zero manual generics needed**. TypeScript infers everything from `initialValues`:
-
-```tsx
-const form = useForm({
-  initialValues: {
-    user: {
-      email: "",
-      profile: {
-        name: "",
-        age: 0,
-      },
-    },
-  },
-});
-
-// ✅ Full autocomplete for nested paths
-form.setValue("user.profile.name", "John");
-
-// ✅ Type checking for values
-form.setValue("user.profile.age", "25"); // Error!
+```ts
+form.setFieldValue('email', 'person@example.com')
+form.setFieldValue('password', 42) // TypeScript error
 ```
 
-### ⚡ Zero Re-renders
+## Subscribe with hooks
 
-Unlike Formik which re-renders all fields on every change, **neo.react-forms** only re-renders the field that changed:
+`form.useField(name)` subscribes a component to one field. It returns the field state and typed operations.
+
+`form.useFormState(selector)` subscribes a component to one selected result. Other form updates do not re-render the component.
 
 ```tsx
-// Updating field0 re-renders ONLY field0 ✅
-// field1-field99 DO NOT re-render! 🎉
-form.setValue("field0", "new value");
+function EmailEditor() {
+  const form = useForm({
+    initialValues: { email: '', acceptedTerms: false },
+  })
+  const email = form.useField('email')
+  const canSubmit = form.useFormState(
+    (state) => state.isValid && state.values.acceptedTerms
+  )
+
+  return (
+    <>
+      <input
+        value={email.value}
+        onChange={(event) => email.setValue(event.currentTarget.value)}
+        onBlur={() => email.setTouched(true)}
+      />
+      <button disabled={!canSubmit}>Continue</button>
+    </>
+  )
+}
 ```
 
-### 📦 Tree-Shakeable Architecture
+Use `form.batch()` for synchronous updates that must send one notification.
 
-```tsx
-// Import only what you need
-import { useForm } from "@lpm.dev/neo.react-forms";
-import { email, minLength } from "@lpm.dev/neo.react-forms/validators";
-import { zodForm } from "@lpm.dev/neo.react-forms/adapters";
+```ts
+form.batch(() => {
+  form.setFieldValue('email', 'person@example.com')
+  form.setFieldTouched('email', true)
+})
 ```
 
-### ✅ Comprehensive Validation
+## Use field arrays
 
-**36 built-in validators** + Zod integration:
+Each item has a stable React key. Array operations are under `helpers`.
 
 ```tsx
-import {
-  compose,
-  required,
-  email,
-  minLength,
-} from "@lpm.dev/neo.react-forms/validators";
-
-const form = useForm({
-  initialValues: { email: "", password: "" },
-  validate: {
-    email: compose(required(), email()),
-    password: compose(required(), minLength(8)),
-  },
-});
+<form.FieldArray name="users">
+  {({ fields, helpers }) => (
+    <>
+      {fields.map((field) => (
+        <div key={field.key}>
+          <form.Field name={`users.${field.index}.name`}>
+            {({ props }) => <input {...props} />}
+          </form.Field>
+          <button type="button" onClick={() => helpers.remove(field.index)}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => helpers.append({ name: '', active: true })}
+      >
+        Add user
+      </button>
+    </>
+  )}
+</form.FieldArray>
 ```
 
-### 🔌 Zod Integration
+## Use Zod
+
+`zodForm` returns `initialValues` and `validate`. Pass both values to `useForm`.
 
 ```tsx
-import { zodForm } from "@lpm.dev/neo.react-forms/adapters";
-import { z } from "zod";
+import { useForm } from '@lpm.dev/neo.react-forms'
+import { zodForm } from '@lpm.dev/neo.react-forms/adapters'
+import { z } from 'zod'
 
 const schema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
-});
+})
 
-const form = zodForm({
-  schema,
+const form = useForm({
+  ...zodForm(schema, { email: '', password: '' }),
   onSubmit: async (values) => {
-    // values is fully typed! ✅
-    await api.signup(values);
+    await api.signup(values)
   },
-});
+})
 ```
 
----
+## Use DevTools safely
 
-## Performance
+Snapshots and debug logs redact common credential fields by default. This includes passwords, tokens, API keys, card data, and other secrets.
 
-### vs Formik & React Hook Form
+```ts
+import {
+  createFormSnapshot,
+  exposeFormToWindow,
+} from '@lpm.dev/neo.react-forms/devtools'
 
-| Metric             | neo.react-forms | Formik  | React Hook Form |
-| ------------------ | --------------- | ------- | --------------- |
-| **Bundle Size**    | **7.1 KB**      | 44.7 KB | 12.1 KB         |
-| **Operations/sec** | **366,000+**    | ~30,000 | ~100,000        |
-| **Re-renders**     | **1**           | 30+     | 1-2             |
+const snapshot = createFormSnapshot(form, initialValues, {
+  sensitiveFields: ['recoveryPhrase', /^payment\./],
+})
 
-**Results**:
+const cleanup = exposeFormToWindow('signup-form', snapshot, {
+  enabled: true,
+})
 
-- **96% smaller** than Formik
-- **83% smaller** than React Hook Form
-- **27-115% faster** for large forms
+// Remove the browser-global value when the form unmounts.
+cleanup()
+```
 
-See [BENCHMARK-RESULTS.md](./BENCHMARK-RESULTS.md) for detailed metrics.
+Global exposure is disabled in production by default. Use `includeSensitiveValues: true` only when you accept the disclosure risk.
 
----
+## Validate a release
+
+The release gate runs typechecks, coverage, SSR tests, explicit-GC memory tests, package checks, and benchmark smoke tests.
+
+```bash
+lpm run release:check
+```
+
+Use the full benchmark suite for local performance work:
+
+```bash
+lpm run bench
+```
+
+Benchmark results depend on the machine and runtime. See [BENCHMARKS.md](./BENCHMARKS.md) for the measurement rules.
+
+## Documentation
+
+- [API reference](./docs/API.md)
+- [TypeScript guide](./docs/TYPESCRIPT-GUIDE.md)
+- [Formik migration](./docs/MIGRATION-FORMIK.md)
+- [React Hook Form migration](./docs/MIGRATION-RHF.md)
 
 ## License
 

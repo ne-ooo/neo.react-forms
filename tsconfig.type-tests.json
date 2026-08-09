@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@lpm.dev/neo.react-forms": ["src/index.ts"],
+      "@lpm.dev/neo.react-forms/validators": ["src/validators/index.ts"],
+      "@lpm.dev/neo.react-forms/validators/string": ["src/validators/string.ts"],
+      "@lpm.dev/neo.react-forms/validators/number": ["src/validators/number.ts"],
+      "@lpm.dev/neo.react-forms/validators/compose": ["src/validators/compose.ts"],
+      "@lpm.dev/neo.react-forms/adapters": ["src/adapters/index.ts"],
+      "@lpm.dev/neo.react-forms/devtools": ["src/devtools/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "type-tests/**/*.tsx"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.bench.ts",
+    "**/__tests__/**"
+  ]
+}

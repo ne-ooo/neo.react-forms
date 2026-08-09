@@ -155,6 +155,12 @@ describe('Type Utilities', () => {
       expectTypeOf<ValueAtPath<Values, 'users'>>().toEqualTypeOf<
         Array<{ name: string; age: number }>
       >()
+      expectTypeOf<ValueAtPath<Values, 'tags.0'>>().toEqualTypeOf<string>()
+      expectTypeOf<ValueAtPath<Values, 'users.0'>>().toEqualTypeOf<{
+        name: string
+        age: number
+      }>()
+      expectTypeOf<ValueAtPath<Values, 'users.0.name'>>().toEqualTypeOf<string>()
     })
   })
 

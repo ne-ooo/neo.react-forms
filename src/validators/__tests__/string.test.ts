@@ -76,6 +76,17 @@ describe('String Validators', () => {
       const validator = url()
       expect(await validator('not-a-url')).toBeTruthy()
       expect(await validator('example.com')).toBeTruthy()
+      expect(await validator('javascript:alert(1)')).toBeTruthy()
+      expect(await validator('data:text/html,<script>alert(1)</script>')).toBeTruthy()
+    })
+
+    it('should allow explicitly configured protocols', async () => {
+      const validator = url('Invalid documentation URL', {
+        protocols: ['https', 'mailto:'],
+      })
+
+      expect(await validator('mailto:team@example.com')).toBeNull()
+      expect(await validator('http://example.com')).toBe('Invalid documentation URL')
     })
 
     it('should return null for empty string', async () => {
@@ -124,6 +135,26 @@ describe('String Validators', () => {
     it('should return null for matching pattern', async () => {
       const validator = pattern(/^[0-9]+$/)
       expect(await validator('123')).toBeNull()
+    })
+
+    it('should be deterministic for global and sticky expressions', async () => {
+      const globalValidator = pattern(/^neo$/g)
+      const stickyValidator = pattern(/neo/y)
+
+      expect(await globalValidator('neo')).toBeNull()
+      expect(await globalValidator('neo')).toBeNull()
+      expect(await stickyValidator('neo')).toBeNull()
+      expect(await stickyValidator('neo')).toBeNull()
+    })
+
+    it('should not change the caller regular expression state', async () => {
+      const expression = /neo/g
+      expression.lastIndex = 2
+      const validator = pattern(expression)
+
+      await validator('neo')
+
+      expect(expression.lastIndex).toBe(2)
     })
   })
 

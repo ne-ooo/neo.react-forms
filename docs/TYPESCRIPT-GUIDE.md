@@ -1,14 +1,12 @@
 # TypeScript Guide
 
-Advanced TypeScript usage with @lpm.dev/neo.react-forms.
+`useForm` infers the form type from `initialValues`. You usually do not need a generic argument.
 
----
+## Inferred paths and values
 
-## Perfect Type Inference
+```tsx
+import { useForm } from '@lpm.dev/neo.react-forms'
 
-**Zero manual generics needed!** TypeScript infers everything from \`initialValues\`:
-
-\`\`\`tsx
 const form = useForm({
   initialValues: {
     user: {
@@ -18,159 +16,121 @@ const form = useForm({
   },
 })
 
-// ✅ Full autocomplete
-form.setValue('user.name', 'John')
-//            ^^^^^^^^^^^ Autocomplete shows all paths
+form.setFieldValue('user.name', 'Ada')
+form.setFieldValue('user.age', 42)
 
-// ✅ Type checking
-form.setValue('user.age', '25')
-//                        ^^^^ Error: Type 'string' not assignable to 'number'
+form.setFieldValue('user.age', '42') // TypeScript error
+form.setFieldValue('user.missing', '') // TypeScript error
 
-// ✅ Return type inference
-const name = form.getValue('user.name') // string
-const age = form.getValue('user.age')   // number
-\`\`\`
+const age = form.getFieldState('user.age').value // number
+```
 
----
+## Typed subscription hooks
 
-## Type Utilities
+The bound field hook infers its value type from the path.
 
-### Path<T>
+```tsx
+const age = form.useField('user.age')
 
-Generate all valid paths for a type:
+age.setValue(42)
+age.setValue('42') // TypeScript error
+```
 
-\`\`\`tsx
-type User = {
-  name: string
-  profile: {
-    age: number
+The form-state selector infers its result type.
+
+```tsx
+const userName = form.useFormState((state) => state.values.user.name)
+// userName is string
+```
+
+## Public type utilities
+
+Import public types with a type-only import.
+
+```ts
+import type {
+  ArrayPath,
+  Path,
+  ValidationContext,
+  Validator,
+  ValueAtPath,
+} from '@lpm.dev/neo.react-forms'
+```
+
+### `Path<T>`
+
+`Path<T>` creates valid object and array paths.
+
+```ts
+type Values = {
+  profile?: {
+    birthday: Date
   }
+  users: Array<{ name: string; active: boolean }>
 }
 
-type UserPath = Path<User>
-// 'name' | 'profile' | 'profile.age'
-\`\`\`
+type ValuesPath = Path<Values>
+// 'profile' | 'profile.birthday' | 'users' | `users.${number}`
+// | `users.${number}.name` | `users.${number}.active`
+```
 
-### ValueAtPath<T, P>
+Built-in leaf values do not expose their prototype methods as form paths. For example, `profile.birthday.getTime` is not a valid path.
 
-Get the type at a specific path:
+### `ArrayPath<T>`
 
-\`\`\`tsx
-type AgeType = ValueAtPath<User, 'profile.age'> // number
-\`\`\`
+`ArrayPath<T>` returns only paths that contain arrays.
 
----
+```ts
+type ListPath = ArrayPath<Values> // 'users'
+```
 
-## Typed Validators
+`FieldArray` uses this type. A scalar field cannot be passed to `FieldArray`.
 
-Validators are fully typed:
+### `ValueAtPath<T, P>`
 
-\`\`\`tsx
-import { Validator } from '@lpm.dev/neo.react-forms'
+`ValueAtPath<T, P>` returns the value type at a path.
 
-// Simple validator
-const emailValidator: Validator<string> = (value) => {
-  return value.includes('@') ? undefined : 'Invalid email'
+```ts
+type UserName = ValueAtPath<Values, 'users.0.name'> // string
+```
+
+## Typed validators
+
+```ts
+interface FormValues {
+  password: string
+  confirmPassword: string
 }
 
-// Validator with form values access
-const confirmPasswordValidator: Validator<string, FormValues> = (
+const confirmPassword: Validator<string, FormValues> = (
   value,
-  values
+  _values,
+  context
 ) => {
-  return value === values.password ? undefined : 'Passwords must match'
+  if (context?.signal.aborted) return undefined
+  return value === context?.values.password ? undefined : 'Passwords must match'
 }
-\`\`\`
+```
 
----
+The validation context contains the field name, an `AbortSignal`, and a detached value snapshot. The snapshot has read-only properties.
 
-## Zod Integration
+The legacy `values` argument references the same snapshot.
 
-Perfect type inference from Zod schemas:
-
-\`\`\`tsx
-import { zodForm } from '@lpm.dev/neo.react-forms/adapters'
-import { z } from 'zod'
-
-const schema = z.object({
-  email: z.string().email(),
-  age: z.number().int().min(18),
-})
-
-const form = zodForm({
-  schema,
-  onSubmit: (values) => {
-    // values is typed as:
-    // { email: string; age: number }
-    values.email // string
-    values.age   // number
-  },
-})
-\`\`\`
-
----
-
-## Strict Mode
-
-neo.react-forms is built with TypeScript strict mode:
-
-\`\`\`json
-{
-  "compilerOptions": {
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
-  }
+```ts
+const uniqueEmail: Validator<string> = async (value, _values, context) => {
+  const response = await fetch(`/api/email?value=${encodeURIComponent(value)}`, {
+    signal: context?.signal,
+  })
+  const result = await response.json()
+  return result.available ? undefined : 'Email is already registered'
 }
-\`\`\`
+```
 
----
+Composition helpers preserve this context.
 
-## Advanced Patterns
+## Typed field arrays
 
-### Conditional Types
-
-\`\`\`tsx
-type ConditionalForm<T> = T extends { requiresPassword: true }
-  ? { password: string }
-  : {}
-
-const form = useForm<ConditionalForm<Config>>({
-  initialValues: config.requiresPassword
-    ? { password: '' }
-    : {},
-})
-\`\`\`
-
-### Discriminated Unions
-
-\`\`\`tsx
-type FormValues =
-  | { type: 'email'; email: string }
-  | { type: 'phone'; phone: string }
-
-const form = useForm<FormValues>({
-  initialValues: { type: 'email', email: '' },
-  validate: {
-    email: (value, values) => {
-      if (values.type === 'email') {
-        // TypeScript knows email exists here
-        return value.includes('@') ? undefined : 'Invalid'
-      }
-      return undefined
-    },
-  },
-})
-\`\`\`
-
----
-
-## Type-Safe Field Arrays
-
-\`\`\`tsx
+```tsx
 interface Todo {
   text: string
   done: boolean
@@ -182,27 +142,80 @@ const form = useForm({
   },
 })
 
-// ✅ Fully typed
 <form.FieldArray name="todos">
-  {({ append }) => (
-    <button onClick={() => append({ text: '', done: false })}>
-      {/*                       ^^^^^^^^^^^^^^^^^^^^^^^ */}
-      {/*                       Typed as Todo */}
-      Add
-    </button>
+  {({ fields, helpers }) => (
+    <>
+      {fields.map((field) => (
+        <span key={field.key}>{field.value.text}</span>
+      ))}
+      <button
+        type="button"
+        onClick={() => helpers.append({ text: '', done: false })}
+      >
+        Add
+      </button>
+    </>
   )}
 </form.FieldArray>
-\`\`\`
+```
 
----
+The argument to `helpers.append` is a `Todo`. The compiler rejects another value type.
 
-## Tips
+## Input value parsing
 
-1. **Let TypeScript infer** - Don't add manual types unless necessary
-2. **Use autocomplete** - Press Ctrl+Space to see available paths
-3. **Check errors** - Hover over red squiggles for helpful messages
-4. **Trust the types** - If TypeScript says it's wrong, it probably is
+Set `inputType` when a DOM input does not produce a string value.
 
----
+```tsx
+<form.Field name="age" inputType="number">
+  {({ props }) => <input {...props} type="number" />}
+</form.Field>
 
-See [API Reference](./API.md) for complete type definitions.
+<form.Field name="accepted" inputType="checkbox">
+  {({ props }) => <input {...props} type="checkbox" />}
+</form.Field>
+```
+
+Use `parse` for an application-specific conversion.
+
+```tsx
+<form.Field
+  name="amount"
+  parse={(event) => Math.round(Number(event.target.value) * 100)}
+>
+  {({ props }) => <input {...props} inputMode="decimal" />}
+</form.Field>
+```
+
+## Zod inference
+
+`zodForm` accepts a schema and initial values. Spread its result into `useForm`.
+
+```ts
+import { z } from 'zod'
+import { useForm } from '@lpm.dev/neo.react-forms'
+import { zodForm } from '@lpm.dev/neo.react-forms/adapters'
+
+const schema = z.object({
+  email: z.string().email(),
+  age: z.number().int().min(18),
+})
+
+const form = useForm({
+  ...zodForm(schema, { email: '', age: 18 }),
+  onSubmit: (values) => {
+    values.email // string
+    values.age // number
+  },
+})
+```
+
+## Typecheck a consumer package
+
+The release gate compiles public ESM and CommonJS consumers. Run it before publication.
+
+```bash
+lpm run typecheck:public
+lpm run build
+lpm run typecheck:package
+lpm run test:package
+```

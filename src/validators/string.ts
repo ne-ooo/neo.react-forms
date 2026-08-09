@@ -7,6 +7,18 @@
 
 import type { Validator } from '../types.js'
 
+const DEFAULT_URL_PROTOCOLS = ['http:', 'https:'] as const
+
+/**
+ * URL validator options.
+ */
+export interface UrlValidatorOptions {
+  /**
+   * Allowed URL protocols. HTTP and HTTPS are allowed by default.
+   */
+  protocols?: readonly string[]
+}
+
 /**
  * Required field validator
  *
@@ -56,6 +68,7 @@ export function email(message = 'Invalid email address'): Validator<string> {
  * URL validator
  *
  * @param message - Custom error message
+ * @param options - Allowed URL protocols. HTTP and HTTPS are allowed by default.
  * @returns Validator function
  *
  * @example
@@ -65,12 +78,22 @@ export function email(message = 'Invalid email address'): Validator<string> {
  * }
  * ```
  */
-export function url(message = 'Invalid URL'): Validator<string> {
+export function url(
+  message = 'Invalid URL',
+  options: UrlValidatorOptions = {}
+): Validator<string> {
+  const protocols = new Set(
+    (options.protocols ?? DEFAULT_URL_PROTOCOLS).map((protocol) => {
+      const normalized = protocol.trim().toLowerCase()
+      return normalized.endsWith(':') ? normalized : `${normalized}:`
+    })
+  )
+
   return (value: string) => {
     if (!value) return null
     try {
-      new URL(value)
-      return null
+      const parsedUrl = new URL(value)
+      return protocols.has(parsedUrl.protocol.toLowerCase()) ? null : message
     } catch {
       return message
     }
@@ -138,8 +161,14 @@ export function maxLength(max: number, message?: string): Validator<string> {
  * ```
  */
 export function pattern(pattern: RegExp, message = 'Invalid format'): Validator<string> {
+  const expression = new RegExp(pattern.source, pattern.flags)
+
   return (value: string) => {
-    if (value && !pattern.test(value)) {
+    expression.lastIndex = 0
+    const matches = expression.test(value)
+    expression.lastIndex = 0
+
+    if (value && !matches) {
       return message
     }
     return null

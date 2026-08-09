@@ -1,31 +1,81 @@
 {
   "name": "@lpm.dev/neo.react-forms",
   "version": "1.0.0",
-  "description": "Modern, performant React form library - 78% smaller than Formik, perfect TypeScript inference",
+  "description": "Typed React form state with field subscriptions, validators, and an optional Zod adapter",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./validators": {
-      "types": "./dist/validators/index.d.ts",
-      "import": "./dist/validators/index.js",
-      "require": "./dist/validators/index.cjs"
+      "import": {
+        "types": "./dist/validators/index.d.ts",
+        "default": "./dist/validators/index.js"
+      },
+      "require": {
+        "types": "./dist/validators/index.d.cts",
+        "default": "./dist/validators/index.cjs"
+      }
+    },
+    "./validators/string": {
+      "import": {
+        "types": "./dist/validators/string.d.ts",
+        "default": "./dist/validators/string.js"
+      },
+      "require": {
+        "types": "./dist/validators/string.d.cts",
+        "default": "./dist/validators/string.cjs"
+      }
+    },
+    "./validators/number": {
+      "import": {
+        "types": "./dist/validators/number.d.ts",
+        "default": "./dist/validators/number.js"
+      },
+      "require": {
+        "types": "./dist/validators/number.d.cts",
+        "default": "./dist/validators/number.cjs"
+      }
+    },
+    "./validators/compose": {
+      "import": {
+        "types": "./dist/validators/compose.d.ts",
+        "default": "./dist/validators/compose.js"
+      },
+      "require": {
+        "types": "./dist/validators/compose.d.cts",
+        "default": "./dist/validators/compose.cjs"
+      }
     },
     "./adapters": {
-      "types": "./dist/adapters/index.d.ts",
-      "import": "./dist/adapters/index.js",
-      "require": "./dist/adapters/index.cjs"
+      "import": {
+        "types": "./dist/adapters/index.d.ts",
+        "default": "./dist/adapters/index.js"
+      },
+      "require": {
+        "types": "./dist/adapters/index.d.cts",
+        "default": "./dist/adapters/index.cjs"
+      }
     },
     "./devtools": {
-      "types": "./dist/devtools/index.d.ts",
-      "import": "./dist/devtools/index.js",
-      "require": "./dist/devtools/index.cjs"
+      "import": {
+        "types": "./dist/devtools/index.d.ts",
+        "default": "./dist/devtools/index.js"
+      },
+      "require": {
+        "types": "./dist/devtools/index.d.cts",
+        "default": "./dist/devtools/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -41,12 +91,22 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:memory": "node --expose-gc ./node_modules/vitest/vitest.mjs run test/benchmarks/memory-leak.test.ts --pool=threads --maxWorkers=1 --minWorkers=1",
+    "test:ssr": "vitest run src/__tests__/release-blockers.test.tsx src/hooks/__tests__/advanced-features.test.tsx -t \"SSR|server\"",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "bench": "vitest bench --run",
-    "typecheck": "tsc --noEmit",
+    "bench:release": "NEO_BENCHMARK_SMOKE=1 vitest bench --run test/benchmarks/release-gate.bench.ts --pool=forks --maxWorkers=1 --minWorkers=1",
+    "typecheck": "lpm run typecheck:source typecheck:public typecheck:tests typecheck:benchmarks",
+    "typecheck:source": "tsc --noEmit",
+    "typecheck:public": "tsc -p tsconfig.type-tests.json",
+    "typecheck:package": "tsc -p tsconfig.package-tests.json && tsc -p tsconfig.package-cjs-tests.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
+    "typecheck:benchmarks": "tsc -p tsconfig.benchmarks.json",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build && npm run test"
+    "test:package": "node test/package-smoke.mjs && node test/package-smoke.cjs",
+    "release:check": "lpm run clean && lpm run typecheck && lpm run test:coverage && lpm run test:ssr && lpm run test:memory && lpm run build && lpm run typecheck:package && lpm run test:package && lpm run bench:release",
+    "prepublishOnly": "lpm run release:check"
   },
   "keywords": [
     "react",
@@ -72,7 +132,8 @@
   },
   "homepage": "https://github.com/ne-ooo/neo.react-forms#readme",
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^18.0.0 || ^19.0.0",
+    "zod": "^3.25.76"
   },
   "peerDependenciesMeta": {
     "zod": {

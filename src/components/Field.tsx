@@ -8,11 +8,21 @@
  * - Uncontrolled mode by default (like RHF)
  */
 
-import { useSyncExternalStore, useCallback, type ChangeEvent, type FocusEvent } from 'react'
+import { useSyncExternalStore, useCallback, type ReactNode } from 'react'
 import type { FormStore } from '../core/store.js'
-import type { Path, ValueAtPath, FieldRenderProps } from '../types.js'
+import { createImmutableSnapshot } from '../utils/immutable.js'
+import type {
+  Path,
+  ValueAtPath,
+  FieldRenderProps,
+  FieldProps as InputProps,
+  FieldChangeEvent,
+  FieldInputType,
+  ValidationMode,
+  Validator,
+} from '../types.js'
 
-export interface FieldProps<Values extends Record<string, unknown>, P extends Path<Values>> {
+export interface FieldProps<Values extends object, P extends Path<Values>> {
   /**
    * Field name (type-safe path)
    */
@@ -26,22 +36,38 @@ export interface FieldProps<Values extends Record<string, unknown>, P extends Pa
   /**
    * Render function with field state
    */
-  children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => JSX.Element
+  children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => ReactNode
 
   /**
    * Validation mode
    */
-  mode?: 'onBlur' | 'onChange'
+  mode?: ValidationMode
 
   /**
    * Re-validation mode
    */
-  reValidateMode?: 'onBlur' | 'onChange'
+  reValidateMode?: ValidationMode
 
   /**
    * Validator function(s)
    */
-  validate?: (value: ValueAtPath<Values, P>) => string | null | Promise<string | null>
+  validate?: Validator<ValueAtPath<Values, P>, Values>
+
+  /**
+   * Built-in parser and value binding for the rendered control.
+   */
+  inputType?: FieldInputType
+
+  /**
+   * Custom DOM event parser.
+   */
+  parse?: (event: FieldChangeEvent) => ValueAtPath<Values, P>
+
+  /**
+   * Form-owned validation pipeline used by the bound Field component.
+   * @internal
+   */
+  validateField?: <Q extends Path<Values>>(name: Q) => Promise<boolean>
 }
 
 /**
@@ -59,14 +85,17 @@ export interface FieldProps<Values extends Record<string, unknown>, P extends Pa
  * </Field>
  * ```
  */
-export function Field<Values extends Record<string, unknown>, P extends Path<Values>>({
+export function Field<Values extends object, P extends Path<Values>>({
   name,
   store,
   children,
   mode = 'onBlur',
   reValidateMode = 'onChange',
   validate,
-}: FieldProps<Values, P>): JSX.Element {
+  inputType = 'text',
+  parse,
+  validateField,
+}: FieldProps<Values, P>): ReactNode {
   // Subscribe to field state changes (isolated re-renders!)
   // Adapt store subscription to useSyncExternalStore API
   const subscribe = useCallback(
@@ -82,28 +111,53 @@ export function Field<Values extends Record<string, unknown>, P extends Path<Val
     [store, name]
   )
 
-  const fieldState = useSyncExternalStore(subscribe, getSnapshot)
+  const fieldState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   // Run validation
-  const runValidation = useCallback(async () => {
-    if (!validate) return true
+  const runValidation = useCallback(
+    async (value: ValueAtPath<Values, P> = store.getValue(name)) => {
+      if (!validate && validateField) {
+        return validateField(name)
+      }
+      if (!validate) {
+        store.markValidated(name)
+        return true
+      }
 
-    const error = await validate(fieldState.value)
-    store.setError(name, error ?? undefined)
-    return !error
-  }, [validate, fieldState.value, store, name])
+      const controller = store.startValidation(name)
+      try {
+        const readonlyValues = createImmutableSnapshot(store.getValues())
+        const error = await validate(value, readonlyValues as Values, {
+          name,
+          signal: controller.signal,
+          values: readonlyValues,
+        })
+        if (store.isValidationCurrent(name, controller)) {
+          store.setError(name, error ?? undefined)
+        }
+        return !error
+      } catch (error) {
+        if (controller.signal.aborted) return true
+        throw error
+      } finally {
+        store.endValidation(name, controller)
+      }
+    },
+    [validate, validateField, store, name]
+  )
 
   // Set field value
   const setValue = useCallback(
     (value: ValueAtPath<Values, P>) => {
+      const wasValidated = store.hasValidated(name)
       store.setValue(name, value)
 
-      // Auto-validate if in onChange mode or if field was already validated
-      if (reValidateMode === 'onChange' || fieldState.error) {
-        runValidation()
+      const activeMode = wasValidated ? reValidateMode : mode
+      if (activeMode === 'onChange' || activeMode === 'all') {
+        void runValidation(value).catch(() => undefined)
       }
     },
-    [store, name, reValidateMode, fieldState.error, runValidation]
+    [store, name, mode, reValidateMode, runValidation]
   )
 
   // Set field error
@@ -117,33 +171,77 @@ export function Field<Values extends Record<string, unknown>, P extends Path<Val
   // Mark field as touched
   const setTouched = useCallback(
     (touched: boolean) => {
+      const wasValidated = store.hasValidated(name)
       store.setTouched(name, touched)
 
-      // Auto-validate if in onBlur mode
-      if (mode === 'onBlur' && touched) {
-        runValidation()
+      const activeMode = wasValidated ? reValidateMode : mode
+      if (touched && (activeMode === 'onBlur' || activeMode === 'all')) {
+        void runValidation().catch(() => undefined)
       }
     },
-    [store, name, mode, runValidation]
+    [store, name, mode, reValidateMode, runValidation]
   )
 
-  // Field props for spreading on input
-  const props: import('../types.js').FieldProps<ValueAtPath<Values, P>> = {
+  const onChange = useCallback(
+    (event: FieldChangeEvent) => {
+      if (parse) {
+        setValue(parse(event))
+        return
+      }
+
+      const target = event.currentTarget
+      let value: unknown
+      switch (inputType) {
+        case 'number': {
+          const input = target as HTMLInputElement
+          value = input.value === '' || Number.isNaN(input.valueAsNumber)
+            ? undefined
+            : input.valueAsNumber
+          break
+        }
+        case 'checkbox':
+          value = (target as HTMLInputElement).checked
+          break
+        case 'file':
+          value = (target as HTMLInputElement).files
+          break
+        case 'select-multiple':
+          value = Array.from((target as HTMLSelectElement).selectedOptions, (option) => option.value)
+          break
+        case 'text':
+          value = target.value
+          break
+      }
+
+      setValue(value as ValueAtPath<Values, P>)
+    },
+    [inputType, parse, setValue]
+  )
+
+  const onBlur = useCallback(() => {
+    setTouched(true)
+  }, [setTouched])
+
+  // Field props for spreading on the configured control type.
+  const props: InputProps<ValueAtPath<Values, P>> = {
     name,
-    value: fieldState.value,
-    onChange: useCallback(
-      (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-        const value = e.target.value as unknown as ValueAtPath<Values, P>
-        setValue(value)
-      },
-      [setValue]
-    ),
-    onBlur: useCallback(
-      (_e: FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-        setTouched(true)
-      },
-      [setTouched]
-    ),
+    onChange,
+    onBlur,
+  }
+
+  if (inputType === 'checkbox') {
+    props.checked = Boolean(fieldState.value)
+  } else if (inputType === 'select-multiple') {
+    props.value = fieldState.value as Exclude<
+      InputProps<ValueAtPath<Values, P>>['value'],
+      undefined
+    >
+    props.multiple = true
+  } else if (inputType !== 'file') {
+    props.value = (fieldState.value ?? '') as Exclude<
+      InputProps<ValueAtPath<Values, P>>['value'],
+      undefined
+    >
   }
 
   // Render props

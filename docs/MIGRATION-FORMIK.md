@@ -1,16 +1,15 @@
 # Migrating from Formik to neo.react-forms
 
-This guide will help you migrate from Formik to @lpm.dev/neo.react-forms.
+Use this guide to migrate a Formik form to `@lpm.dev/neo.react-forms`.
 
 ---
 
 ## Why Migrate?
 
-- ⚡ **27-115% faster** for large forms
-- 📦 **96% smaller bundle** (7.1 KB vs 44.7 KB)
-- 🎨 **Zero re-render cascade** (Formik re-renders all fields)
-- 🎯 **Better TypeScript** inference
-- 💾 **Better memory efficiency**
+- Use field-level subscriptions.
+- Infer form paths and values from `initialValues`.
+- Use built-in validators or the optional Zod adapter.
+- Remove Formik from the runtime dependency graph.
 
 ---
 
@@ -18,11 +17,11 @@ This guide will help you migrate from Formik to @lpm.dev/neo.react-forms.
 
 | Feature | Formik | neo.react-forms |
 |---------|--------|-----------------|
-| Bundle Size | 44.7 KB | **7.1 KB** (96% smaller) |
-| Re-renders | All fields | **Only changed field** |
+| Bundle Size | Measure in your application | Measure in your application |
+| Re-renders | Form context updates | Field subscriptions |
 | TypeScript | Manual generics | **Automatic inference** |
-| Performance | ~30k ops/sec | **366k+ ops/sec** |
-| Dependencies | Multiple | **Zero** |
+| Performance | Measure equivalent work | Measure equivalent work |
+| Dependencies | Formik and its dependencies | No runtime dependency |
 
 ---
 
@@ -30,7 +29,7 @@ This guide will help you migrate from Formik to @lpm.dev/neo.react-forms.
 
 ### Before (Formik)
 
-\`\`\`tsx
+```tsx
 import { Formik, Form, Field } from 'formik'
 
 function SignupForm() {
@@ -63,11 +62,11 @@ function SignupForm() {
     </Formik>
   )
 }
-\`\`\`
+```
 
 ### After (neo.react-forms)
 
-\`\`\`tsx
+```tsx
 import { useForm } from '@lpm.dev/neo.react-forms'
 
 function SignupForm() {
@@ -85,11 +84,11 @@ function SignupForm() {
   return (
     <form onSubmit={form.handleSubmit}>
       <form.Field name="email">
-        {({ field }) => <input type="email" {...field} />}
+        {({ props }) => <input type="email" {...props} />}
       </form.Field>
       
       <form.Field name="password">
-        {({ field }) => <input type="password" {...field} />}
+        {({ props }) => <input type="password" {...props} />}
       </form.Field>
 
       <button type="submit" disabled={form.isSubmitting}>
@@ -98,7 +97,7 @@ function SignupForm() {
     </form>
   )
 }
-\`\`\`
+```
 
 ---
 
@@ -108,56 +107,56 @@ function SignupForm() {
 
 | Formik | neo.react-forms |
 |--------|-----------------|
-| \`validate\` prop (form-level) | \`validateForm\` option |
-| \`validationSchema\` (Yup) | \`validate\` object or \`zodAdapter\` |
+| `validate` prop (form-level) | `validateForm` option |
+| `validationSchema` (Yup) | `validate` object or `zodAdapter` |
 | Custom validators | Same pattern, cleaner syntax |
 
 **Formik:**
-\`\`\`tsx
+```tsx
 validate={(values) => {
   const errors: any = {}
   if (!values.email) errors.email = 'Required'
   return errors
 }}
-\`\`\`
+```
 
 **neo.react-forms:**
-\`\`\`tsx
+```tsx
 validate={{
   email: (value) => value ? undefined : 'Required'
 }}
-\`\`\`
+```
 
 ### Field Access
 
 | Formik | neo.react-forms |
 |--------|-----------------|
-| \`<Field name="email" />\` | \`<form.Field name="email">{...}</form.Field>\` |
-| \`formik.values.email\` | \`form.values.email\` |
-| \`formik.errors.email\` | \`form.errors.email\` |
-| \`formik.touched.email\` | \`form.touched.email\` |
+| `<Field name="email" />` | `<form.Field name="email">{...}</form.Field>` |
+| `formik.values.email` | `form.values.email` |
+| `formik.errors.email` | `form.errors.email` |
+| `formik.touched.email` | `form.touched.email` |
 
 ### Methods
 
 | Formik | neo.react-forms |
 |--------|-----------------|
-| \`setFieldValue(name, value)\` | \`setValue(name, value)\` |
-| \`setFieldError(name, error)\` | \`setError(name, error)\` |
-| \`setFieldTouched(name, true)\` | \`setTouched(name, true)\` |
-| \`validateField(name)\` | \`validateField(name)\` |
-| \`validateForm()\` | \`validateForm()\` |
-| \`resetForm()\` | \`reset()\` |
-| \`handleSubmit\` | \`handleSubmit\` |
+| `setFieldValue(name, value)` | `setFieldValue(name, value)` |
+| `setFieldError(name, error)` | `setFieldError(name, error)` |
+| `setFieldTouched(name, true)` | `setFieldTouched(name, true)` |
+| `validateField(name)` | `validateField(name)` |
+| `validateForm()` | `validate()` |
+| `resetForm()` | `reset()` |
+| `handleSubmit` | `handleSubmit` |
 
 ### State
 
 | Formik | neo.react-forms |
 |--------|-----------------|
-| \`isValid\` | \`isValid\` |
-| \`dirty\` | \`isDirty\` |
-| \`isSubmitting\` | \`isSubmitting\` |
-| \`submitCount\` | \`submitCount\` |
-| \`isValidating\` | \`isValidating\` |
+| `isValid` | `isValid` |
+| `dirty` | `isDirty` |
+| `isSubmitting` | `isSubmitting` |
+| `submitCount` | `submitCount` |
+| `isValidating` | `isValidating` |
 
 ---
 
@@ -166,45 +165,45 @@ validate={{
 ### FieldArray Migration
 
 **Formik:**
-\`\`\`tsx
+```tsx
 import { FieldArray } from 'formik'
 
 <FieldArray name="todos">
   {({ push, remove }) => (
     <>
       {values.todos.map((todo, index) => (
-        <Field name={\`todos.\${index}.text\`} />
+        <Field name={`todos.\${index}.text`} />
       ))}
       <button onClick={() => push({ text: '' })}>Add</button>
     </>
   )}
 </FieldArray>
-\`\`\`
+```
 
 **neo.react-forms:**
-\`\`\`tsx
+```tsx
 <form.FieldArray name="todos">
-  {({ fields, append, remove }) => (
+  {({ fields, helpers }) => (
     <>
       {fields.map((field, index) => (
         <input
           key={field.key}
           value={form.values.todos[index].text}
           onChange={(e) =>
-            form.setValue(\`todos.\${index}.text\`, e.target.value)
+            form.setFieldValue(`todos.\${index}.text`, e.target.value)
           }
         />
       ))}
-      <button onClick={() => append({ text: '' })}>Add</button>
+      <button type="button" onClick={() => helpers.append({ text: '' })}>Add</button>
     </>
   )}
 </form.FieldArray>
-\`\`\`
+```
 
 ### Yup Schema Migration
 
 **Formik:**
-\`\`\`tsx
+```tsx
 import * as Yup from 'yup'
 
 const schema = Yup.object({
@@ -213,10 +212,11 @@ const schema = Yup.object({
 })
 
 <Formik validationSchema={schema} ...>
-\`\`\`
+```
 
 **neo.react-forms (use Zod instead):**
-\`\`\`tsx
+```tsx
+import { useForm } from '@lpm.dev/neo.react-forms'
 import { zodForm } from '@lpm.dev/neo.react-forms/adapters'
 import { z } from 'zod'
 
@@ -225,26 +225,24 @@ const schema = z.object({
   password: z.string().min(8),
 })
 
-const form = zodForm({ schema, onSubmit: ... })
-\`\`\`
+const form = useForm({
+  ...zodForm(schema, { email: '', password: '' }),
+  onSubmit: async (values) => { ... },
+})
+```
 
 ---
 
-## Performance Improvements
+## Verify performance
 
-After migrating, you'll see:
-
-1. **Faster Field Updates**: < 0.003ms vs Formik's ~10ms
-2. **No Re-render Cascade**: Only the changed field re-renders
-3. **Smaller Bundle**: 96% reduction in bundle size
-4. **Better Memory**: < 10 MB vs Formik's ~50 MB for 100 fields
+Measure the migrated form in your application. Compare the same validation, rendering, and submission work. See [the benchmark guide](../BENCHMARKS.md) for measurement rules.
 
 ---
 
 ## Complete Example
 
 **Before (Formik):**
-\`\`\`tsx
+```tsx
 import { Formik, Form, Field, ErrorMessage, FieldArray } from 'formik'
 import * as Yup from 'yup'
 
@@ -278,8 +276,8 @@ function ComplexForm() {
               <>
                 {values.tags.map((tag, index) => (
                   <div key={index}>
-                    <Field name={\`tags.\${index}\`} />
-                    <button onClick={() => remove(index)}>Remove</button>
+                    <Field name={`tags.\${index}`} />
+          <button type="button" onClick={() => remove(index)}>Remove</button>
                   </div>
                 ))}
                 <button onClick={() => push('')}>Add Tag</button>
@@ -295,10 +293,11 @@ function ComplexForm() {
     </Formik>
   )
 }
-\`\`\`
+```
 
 **After (neo.react-forms):**
-\`\`\`tsx
+```tsx
+import { useForm } from '@lpm.dev/neo.react-forms'
 import { zodForm } from '@lpm.dev/neo.react-forms/adapters'
 import { z } from 'zod'
 
@@ -309,46 +308,46 @@ const schema = z.object({
 })
 
 function ComplexForm() {
-  const form = zodForm({
-    schema,
+  const form = useForm({
+    ...zodForm(schema, { email: '', password: '', tags: [] }),
     onSubmit: async (values) => await api.submit(values),
   })
 
   return (
     <form onSubmit={form.handleSubmit}>
       <form.Field name="email">
-        {({ field, error, touched }) => (
+        {({ props, error, touched }) => (
           <div>
-            <input type="email" {...field} />
+            <input type="email" {...props} />
             {touched && error && <span>{error}</span>}
           </div>
         )}
       </form.Field>
 
       <form.Field name="password">
-        {({ field, error, touched }) => (
+        {({ props, error, touched }) => (
           <div>
-            <input type="password" {...field} />
+            <input type="password" {...props} />
             {touched && error && <span>{error}</span>}
           </div>
         )}
       </form.Field>
 
       <form.FieldArray name="tags">
-        {({ fields, append, remove }) => (
+        {({ fields, helpers }) => (
           <>
             {fields.map((field, index) => (
               <div key={field.key}>
                 <input
                   value={form.values.tags[index]}
                   onChange={(e) =>
-                    form.setValue(\`tags.\${index}\`, e.target.value)
+                    form.setFieldValue(`tags.\${index}`, e.target.value)
                   }
                 />
-                <button onClick={() => remove(index)}>Remove</button>
+                <button type="button" onClick={() => helpers.remove(index)}>Remove</button>
               </div>
             ))}
-            <button onClick={() => append('')}>Add Tag</button>
+            <button type="button" onClick={() => helpers.append('')}>Add Tag</button>
           </>
         )}
       </form.FieldArray>
@@ -359,7 +358,7 @@ function ComplexForm() {
     </form>
   )
 }
-\`\`\`
+```
 
 ---
 
@@ -367,20 +366,19 @@ function ComplexForm() {
 
 ### My form is slower after migration
 
-Make sure you're using \`form.Field\` components for proper field isolation. Manual field binding without subscriptions won't benefit from performance optimizations.
+Make sure you're using `form.Field` components for proper field isolation. Manual field binding without subscriptions won't benefit from performance optimizations.
 
 ### TypeScript errors with paths
 
-neo.react-forms has strict path typing. Use the autocomplete to see available paths. If you need dynamic paths, you can cast: \`form.setValue(dynamicPath as any, value)\`
+neo.react-forms has strict path typing. Use autocomplete to find valid paths. Prefer a typed `Path<Values>` variable for a dynamic path. Avoid `any` casts.
 
 ### Validation not working
 
-Check that validators return \`undefined\` for valid values, not \`true\` or empty string.
+Check that validators return `null` or `undefined` for valid values. A validator returns an error string for invalid values.
 
 ---
 
 ## Need Help?
 
 - Check the [API Reference](./API.md)
-- See [Examples](../examples/)
 - Open an issue on [GitHub](https://github.com/ne-ooo/neo.react-forms/issues)

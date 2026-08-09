@@ -30,16 +30,18 @@ import type { Validator, ValidationSchema } from '../types.js'
  * Zod types (imported as type-only to avoid runtime dependency)
  */
 type ZodTypeAny = any
-type ZodObject<T = any> = {
-  shape: T
-  safeParse: (value: any) => { success: boolean; error?: { issues: Array<{ path: string[]; message: string }> } }
+type ZodObject<Shape = any, Output extends object = object> = {
+  shape: Shape
   _def: { typeName: string }
+  _output: Output
 }
 
 /**
  * Extract Zod schema type
  */
-export type ZodInfer<T> = T extends { _output: infer O } ? O : never
+export type ZodInfer<T> = T extends { _output: infer Output extends object }
+  ? Output
+  : never
 
 /**
  * Convert Zod schema to validator function

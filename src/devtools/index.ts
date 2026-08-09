@@ -16,6 +16,7 @@ export {
   debugFormState,
   createFormId,
   createTimer,
+  type DebugConfig,
 } from '../utils/debug.js'
 
 // Accessibility helpers
@@ -25,6 +26,7 @@ export {
   getLabelProps,
   getErrorProps,
   getDescriptionProps,
+  createSafeHtmlId,
   announceToScreenReader,
   announceValidationError,
   announceFormSubmission,
@@ -47,6 +49,13 @@ export {
   exposeFormToWindow,
   diffFormState,
   createPerformanceMonitor,
+  REDACTED_VALUE,
+  isSensitiveField,
+  redactDevToolsValue,
   type FormSnapshot,
   type PerformanceMetrics,
+  type DevToolsValue,
+  type DevToolsPrivacyOptions,
+  type ExposeFormOptions,
+  type SensitiveFieldMatcher,
 } from '../utils/devtools.js'

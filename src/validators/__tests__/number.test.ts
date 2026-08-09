@@ -20,6 +20,8 @@ import {
 } from '../number.js'
 
 describe('Number Validators', () => {
+  const invalidNumbers = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]
+
   describe('min', () => {
     it('should return error for value below minimum', async () => {
       const validator = min(10)
@@ -185,6 +187,19 @@ describe('Number Validators', () => {
       expect(await validator(3)).toBeTruthy()
       expect(await validator(7)).toBeTruthy()
     })
+
+    it('supports decimal divisors without floating-point false negatives', async () => {
+      const validator = multipleOf(0.1)
+
+      expect(await validator(0.3)).toBeNull()
+      expect(await validator(0.31)).toBeTruthy()
+    })
+
+    it('rejects zero and non-finite divisors', () => {
+      expect(() => multipleOf(0)).toThrow(RangeError)
+      expect(() => multipleOf(Number.NaN)).toThrow(RangeError)
+      expect(() => multipleOf(Number.POSITIVE_INFINITY)).toThrow(RangeError)
+    })
   })
 
   describe('even', () => {
@@ -215,5 +230,41 @@ describe('Number Validators', () => {
       expect(await validator(0)).toBeTruthy()
       expect(await validator(2)).toBeTruthy()
     })
+
+    it('should return error for non-integers', async () => {
+      const validator = odd()
+
+      expect(await validator(1.5)).toBeTruthy()
+    })
+  })
+
+  it('rejects NaN and infinity in every numeric validator', async () => {
+    const validators = [
+      min(0),
+      max(10),
+      between(0, 10),
+      integer(),
+      positive(),
+      negative(),
+      nonNegative(),
+      nonPositive(),
+      safeInteger(),
+      finite(),
+      multipleOf(2),
+      even(),
+      odd(),
+    ]
+
+    for (const validator of validators) {
+      for (const value of invalidNumbers) {
+        expect(await validator(value)).toBeTruthy()
+      }
+    }
+  })
+
+  it('rejects invalid range configuration', () => {
+    expect(() => min(Number.NaN)).toThrow(RangeError)
+    expect(() => max(Number.POSITIVE_INFINITY)).toThrow(RangeError)
+    expect(() => between(10, 5)).toThrow(RangeError)
   })
 })

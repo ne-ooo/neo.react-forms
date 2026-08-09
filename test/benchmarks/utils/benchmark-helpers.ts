@@ -3,6 +3,26 @@
  */
 
 import { performance } from 'node:perf_hooks'
+import { bench as vitestBench } from 'vitest'
+
+/**
+ * Register a benchmark. The release gate uses one measured iteration to prove
+ * that every benchmark can load and execute without turning CI timing into a
+ * performance assertion.
+ */
+export function benchmark(name: string, fn: () => void | Promise<void>): void {
+  if (process.env.NEO_BENCHMARK_SMOKE === '1') {
+    vitestBench(name, fn, {
+      iterations: 1,
+      time: 1,
+      warmupIterations: 0,
+      warmupTime: 0,
+    })
+    return
+  }
+
+  vitestBench(name, fn)
+}
 
 /**
  * Generate form data with N fields
@@ -73,11 +93,11 @@ export function runBenchmark(
   times.sort((a, b) => a - b)
 
   const mean = times.reduce((sum, t) => sum + t, 0) / times.length
-  const median = times[Math.floor(times.length / 2)]
-  const min = times[0]
-  const max = times[times.length - 1]
-  const p95 = times[Math.floor(times.length * 0.95)]
-  const p99 = times[Math.floor(times.length * 0.99)]
+  const median = times[Math.floor(times.length / 2)] ?? 0
+  const min = times[0] ?? 0
+  const max = times[times.length - 1] ?? 0
+  const p95 = times[Math.floor(times.length * 0.95)] ?? 0
+  const p99 = times[Math.floor(times.length * 0.99)] ?? 0
 
   return { mean, median, min, max, p95, p99 }
 }

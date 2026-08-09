@@ -5,10 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { FormStore } from '../src/core/store.js'
+import { FormStore } from '../../src/core/store.js'
 import { MemoryTracker } from './utils/benchmark-helpers.js'
 
-describe('Memory Leak Tests', () => {
+describe.runIf(typeof global.gc === 'function')('Memory Leak Tests', () => {
   let tracker: MemoryTracker
 
   beforeEach(() => {
@@ -29,12 +29,13 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
-    // Memory should stabilize (not grow linearly)
-    // Peak should be reasonable (< 10 MB for 1000 stores)
-    expect(stats.peak).toBeLessThan(10)
+    // Retained memory should stabilize after garbage collection. Allocation
+    // peaks are intentionally not asserted because they vary by runtime.
+    expect(stats.current).toBeLessThan(10)
 
     console.log('Store creation/destruction memory:', tracker.formatStats())
   })
@@ -57,11 +58,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Memory should not grow significantly (10k subscriptions = ~10MB max)
-    expect(stats.peak).toBeLessThan(15)
+    expect(stats.current).toBeLessThan(10)
 
     console.log('Subscription lifecycle memory:', tracker.formatStats())
   })
@@ -83,11 +85,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Memory should not grow significantly (old values should be GC'd)
-    expect(stats.peak).toBeLessThan(5)
+    expect(stats.current).toBeLessThan(5)
 
     console.log('Value update memory:', tracker.formatStats())
   })
@@ -120,11 +123,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Memory should not grow significantly
-    expect(stats.peak).toBeLessThan(5)
+    expect(stats.current).toBeLessThan(5)
 
     console.log('Notification memory:', tracker.formatStats())
   })
@@ -154,11 +158,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Memory should be reasonable for 100 fields
-    expect(stats.peak).toBeLessThan(10)
+    expect(stats.current).toBeLessThan(10)
 
     console.log('Multiple fields memory:', tracker.formatStats())
   })
@@ -184,11 +189,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Reset should clean up properly
-    expect(stats.peak).toBeLessThan(5)
+    expect(stats.current).toBeLessThan(5)
 
     console.log('Reset memory:', tracker.formatStats())
   })
@@ -223,11 +229,12 @@ describe('Memory Leak Tests', () => {
     if (global.gc) {
       global.gc()
     }
+    tracker.sample()
 
     const stats = tracker.getStats()
 
     // Memory should not grow (100k subscriptions lifecycle = ~15MB max)
-    expect(stats.peak).toBeLessThan(20)
+    expect(stats.current).toBeLessThan(10)
 
     console.log('Subscriber cleanup memory:', tracker.formatStats())
   })
