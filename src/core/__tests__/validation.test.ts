@@ -178,11 +178,11 @@ describe('Validation Logic', () => {
       const store = new FormStore<{ tags: string[] }>({ tags: [] })
 
       const validator = schema.tags
-      const error1 = validator(store.getValue('tags'))
+      const error1 = validator(store.getInternalValue('tags'))
       expect(error1).toBe('At least one tag required')
 
       store.setValue('tags', ['tag1'])
-      const error2 = validator(store.getValue('tags'))
+      const error2 = validator(store.getInternalValue('tags'))
       expect(error2).toBeUndefined()
     })
   })

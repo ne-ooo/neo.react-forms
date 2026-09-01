@@ -1,6 +1,11 @@
 import { Window } from 'happy-dom'
 
-const browserWindow = new Window({ url: 'http://localhost/' })
+const browserWindow = new Window({
+  url: 'http://localhost/',
+  settings: {
+    disableJavaScriptEvaluation: true,
+  },
+})
 const globalObject = globalThis as Record<PropertyKey, unknown>
 
 for (const key of Reflect.ownKeys(browserWindow)) {

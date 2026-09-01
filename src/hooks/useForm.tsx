@@ -26,7 +26,7 @@ import {
   createBoundUseFormState,
   type FieldHookOperations,
 } from './boundHooks.js'
-import { createImmutableSnapshot } from '../utils/immutable.js'
+import { createLazyImmutableSnapshot } from '../utils/immutable.js'
 import type {
   UseFormOptions,
   UseFormReturn,
@@ -46,16 +46,16 @@ import type {
  * Run validator(s) for a field
  */
 async function runValidators<T, Values = unknown>(
-  value: T,
+  value: DeepReadonly<T>,
   validators: Validator<T, Values> | Validator<T, Values>[],
-  values: Values | undefined,
+  values: DeepReadonly<Values> | undefined,
   context: ValidationContext<Values>
 ): Promise<string | undefined> {
   const validatorArray = Array.isArray(validators) ? validators : [validators]
 
   for (const validator of validatorArray) {
     const error = await validator(value, values, context)
-    if (error) {
+    if (error !== null && error !== undefined) {
       return error
     }
   }
@@ -69,7 +69,7 @@ async function runValidators<T, Values = unknown>(
 function getValidatorForPath<Values extends object>(
   schema: ValidationSchema<Values> | undefined,
   path: string
-): Validator<unknown> | Validator<unknown>[] | undefined {
+): Validator<unknown, Values> | Validator<unknown, Values>[] | undefined {
   if (!schema) return undefined
 
   const keys = path.split('.')
@@ -88,7 +88,48 @@ function getValidatorForPath<Values extends object>(
     current = (current as Record<string, unknown>)[key]
   }
 
-  return current as Validator<unknown> | Validator<unknown>[] | undefined
+  return current as
+    | Validator<unknown, Values>
+    | Validator<unknown, Values>[]
+    | undefined
+}
+
+const RESERVED_VALIDATION_PATH_SEGMENTS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+])
+
+function assertSafeValidationPath(path: string): void {
+  if (
+    !path ||
+    path.split('.').some((segment) =>
+      RESERVED_VALIDATION_PATH_SEGMENTS.has(segment)
+    )
+  ) {
+    throw new Error(`Unsafe form validation error path: ${path}`)
+  }
+}
+
+function mergeFormValidationErrors<Values extends object>(
+  target: Partial<Record<Path<Values>, string>>,
+  source: Partial<Record<Path<Values>, string>>
+): void {
+  if (source === null || typeof source !== 'object' || Array.isArray(source)) {
+    throw new TypeError('Form validation must return an error record')
+  }
+  const prototype = Object.getPrototypeOf(source)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('Form validation must return a plain error record')
+  }
+
+  for (const [path, error] of Object.entries(source)) {
+    assertSafeValidationPath(path)
+    if (typeof error !== 'string') {
+      throw new TypeError(`Form validation error at "${path}" must be a string`)
+    }
+    target[path as Path<Values>] = error
+  }
 }
 
 /**
@@ -128,8 +169,60 @@ export function useForm<Values extends object>(
   // Create one store per mounted form instance. initialValues and computed are
   // intentionally snapshots; reset() is the API for changing the baseline.
   const [store] = useState(() => new FormStore(initialValues, computed))
-  const [observedSlices] = useState(() => new Set<FormStoreSlice>())
+  const observedSlices = useRef(new Set<FormStoreSlice>())
+  const renderObservedSlices = new Set<FormStoreSlice>()
+  const storeRequestedOwnerRender = useRef(false)
+  const renderedFromStoreUpdate = storeRequestedOwnerRender.current
   const [useBoundFormState] = useState(() => createBoundUseFormState(store))
+  const registeredFieldValidators = useRef(
+    new Map<
+      string,
+      Array<{
+        token: symbol
+        validator: Validator<unknown, Values>
+      }>
+    >()
+  )
+  const formValidationGeneration = useRef(0)
+  const validationConfigGeneration = useRef(0)
+  const previousValidationConfig = useRef({ validate, validateForm })
+
+  const registerFieldValidator = useCallback(
+    <P extends Path<Values>>(
+      name: P,
+      validator: Validator<ValueAtPath<Values, P>, Values>
+    ): (() => void) => {
+      assertSafeValidationPath(name)
+      formValidationGeneration.current++
+      store.cancelValidation(name)
+      const token = Symbol(name)
+      const registrations = registeredFieldValidators.current.get(name) ?? []
+      registrations.push({
+        token,
+        validator: validator as Validator<unknown, Values>,
+      })
+      registeredFieldValidators.current.set(name, registrations)
+
+      return () => {
+        const currentRegistrations = registeredFieldValidators.current.get(name)
+        if (!currentRegistrations) return
+        const registrationIndex = currentRegistrations.findIndex(
+          (registration) => registration.token === token
+        )
+        if (registrationIndex === -1) return
+        const wasActive = registrationIndex === currentRegistrations.length - 1
+        currentRegistrations.splice(registrationIndex, 1)
+        if (currentRegistrations.length === 0) {
+          registeredFieldValidators.current.delete(name)
+        }
+        if (wasActive) {
+          formValidationGeneration.current++
+          store.cancelValidation(name)
+        }
+      }
+    },
+    [store]
+  )
 
   // Re-render only for form-state slices actually read by the owner. A form
   // that only renders bound Fields stays isolated from unrelated field work.
@@ -138,17 +231,37 @@ export function useForm<Values extends object>(
       (callback) =>
         store.subscribeToStore((changedSlices) => {
           for (const slice of changedSlices) {
-            if (observedSlices.has(slice)) {
+            if (observedSlices.current.has(slice)) {
+              storeRequestedOwnerRender.current = true
               callback()
               return
             }
           }
         }),
-      [observedSlices, store]
+      [store]
     ),
     useCallback(() => store.getVersion(), [store]),
     useCallback(() => store.getVersion(), [store])
   )
+
+  // Commit only the slices read by this render. Reads made later from event
+  // handlers or imperative code do not widen the component subscription.
+  useEffect(() => {
+    observedSlices.current = new Set(renderObservedSlices)
+    storeRequestedOwnerRender.current = false
+  })
+
+  useEffect(() => {
+    const previous = previousValidationConfig.current
+    if (previous.validate === validate && previous.validateForm === validateForm) {
+      return
+    }
+    previousValidationConfig.current = { validate, validateForm }
+    if (renderedFromStoreUpdate) return
+    validationConfigGeneration.current++
+    formValidationGeneration.current++
+    store.cancelAllValidations()
+  }, [renderedFromStoreUpdate, store, validate, validateForm])
 
   const runFieldValidation = useCallback(
     async (
@@ -156,21 +269,26 @@ export function useForm<Values extends object>(
       validators: Validator<unknown, Values> | Validator<unknown, Values>[],
       commit: boolean,
       existingController?: AbortController,
-      existingValues?: DeepReadonly<Values>
+      existingValues?: DeepReadonly<Values>,
+      existingSourceValues?: Values
     ): Promise<{ error: string | undefined; current: boolean }> => {
-      const readonlyValues = existingValues ?? createImmutableSnapshot(store.getValues())
-      const values = readonlyValues as Values
-      const value = getValueByPath(values, name)
+      const configGeneration = validationConfigGeneration.current
+      const sourceValues = existingSourceValues ?? store.getInternalValues()
+      const readonlyValues = existingValues ?? createLazyImmutableSnapshot(sourceValues)
+      const value = getValueByPath(readonlyValues, name)
       const controller = existingController ?? store.startValidation(name)
       const ownsController = existingController === undefined
 
       try {
-        const error = await runValidators(value, validators, values, {
+        const error = await runValidators(value, validators, readonlyValues, {
           name,
           signal: controller.signal,
           values: readonlyValues,
         })
-        const current = store.isValidationCurrent(name, controller)
+        const current =
+          store.isValidationCurrent(name, controller) &&
+          store.getInternalValues() === sourceValues &&
+          validationConfigGeneration.current === configGeneration
         if (commit && current) {
           store.setError(name, error)
         }
@@ -190,20 +308,23 @@ export function useForm<Values extends object>(
   // Validate a single field
   const validateField = useCallback(
     async <P extends Path<Values>>(name: P): Promise<boolean> => {
-      const validators = getValidatorForPath(validate, name)
+      const validators =
+        registeredFieldValidators.current.get(name)?.at(-1)?.validator ??
+        getValidatorForPath(validate, name)
 
       if (!validators) {
+        store.cancelValidation(name)
         store.markValidated(name)
         store.setError(name, undefined)
         return true
       }
 
-      const { error } = await runFieldValidation(
+      const { error, current } = await runFieldValidation(
         name,
         validators as Validator<unknown, Values> | Validator<unknown, Values>[],
         true
       )
-      return !error
+      return current && error === undefined
     },
     [runFieldValidation, validate, store]
   )
@@ -220,17 +341,29 @@ export function useForm<Values extends object>(
     []
   )
 
+  useEffect(() => {
+    return () => {
+      formValidationGeneration.current++
+      registeredFieldValidators.current.clear()
+      store.dispose()
+    }
+  }, [store])
+
   // Validate entire form
-  const validateFormFn = useCallback(async (touchFields = false): Promise<boolean> => {
+  const runFormValidation = useCallback(async (
+    touchFields = false
+  ): Promise<{ isValid: boolean; values: DeepReadonly<Values> }> => {
+    const generation = ++formValidationGeneration.current
+    const errorRevision = store.getErrorRevision()
     // Run all field validators
-    const currentValues = store.getValues()
-    const readonlyValues = createImmutableSnapshot(currentValues)
-    const values = readonlyValues as Values
-    const errors: Partial<Record<Path<Values>, string>> = {}
-    const validationTasks: Array<{
+    const currentValues = store.getInternalValues()
+    const readonlyValues = createLazyImmutableSnapshot(currentValues)
+    const values = readonlyValues
+    const errors = Object.create(null) as Partial<Record<Path<Values>, string>>
+    const validationTasks = new Map<string, {
       name: Path<Values>
       validators: Validator<unknown, Values> | Validator<unknown, Values>[]
-    }> = []
+    }>()
 
     if (validate) {
       // Expand nested schemas, including the schema for every current array item.
@@ -241,10 +374,11 @@ export function useForm<Values extends object>(
 
         for (const [key, validators] of Object.entries(obj)) {
           const path = prefix ? `${prefix}.${key}` : key
+          assertSafeValidationPath(path)
 
           // Check if this is a validator function or array of validators
           if (typeof validators === 'function' || Array.isArray(validators)) {
-            validationTasks.push({
+            validationTasks.set(path, {
               name: path as Path<Values>,
               validators: validators as
                 | Validator<unknown, Values>
@@ -264,21 +398,33 @@ export function useForm<Values extends object>(
       }
 
       collectValidationTasks(validate)
-
     }
+
+    for (const [name, registrations] of registeredFieldValidators.current) {
+      const validator = registrations.at(-1)?.validator
+      if (!validator) continue
+      assertSafeValidationPath(name)
+      validationTasks.set(name, {
+        name: name as Path<Values>,
+        validators: validator,
+      })
+    }
+
+    const validationTaskList = Array.from(validationTasks.values())
 
     const controllers = store.batch(() => {
       const next = new Map<Path<Values>, AbortController>()
-      for (const { name } of validationTasks) {
+      for (const { name } of validationTaskList) {
         next.set(name, store.startValidation(name))
       }
       return next
     })
     let validationsEnded = false
-    const endValidations = (): void => {
+    const endValidations = (abort = false): void => {
       if (validationsEnded) return
       store.batch(() => {
         for (const [name, controller] of controllers) {
+          if (abort) controller.abort()
           store.endValidation(name, controller)
         }
       })
@@ -287,42 +433,56 @@ export function useForm<Values extends object>(
 
     try {
       const results = await Promise.all(
-        validationTasks.map(async ({ name, validators }) => ({
+        validationTaskList.map(async ({ name, validators }) => ({
           name,
           ...(await runFieldValidation(
             name,
             validators,
             false,
             controllers.get(name),
-            readonlyValues
+            readonlyValues,
+            currentValues
           )),
         }))
       )
 
       // A newer field validation superseded this form validation. Treat the
       // form result as stale instead of clearing errors or allowing submit.
-      if (results.some(({ current }) => !current)) {
-        return false
+      if (
+        generation !== formValidationGeneration.current ||
+        store.getErrorRevision() !== errorRevision ||
+        results.some(({ current }) => !current)
+      ) {
+        return { isValid: false, values }
       }
 
       for (const result of results) {
-        if (result.error) errors[result.name] = result.error
+        if (result.error !== undefined) errors[result.name] = result.error
       }
 
       // Run form-level validation
       if (validateForm) {
         const formErrors = await validateForm(values)
-        if (formErrors) Object.assign(errors, formErrors)
+        if (formErrors) mergeFormValidationErrors(errors, formErrors)
       }
 
-      // Do not publish a form-level result for a value snapshot that changed
-      // while asynchronous validation was running.
-      if (store.getValues() !== currentValues) return false
+      // Do not publish a form-level result when a newer field/form run or value
+      // snapshot superseded it while asynchronous validation was running.
+      if (
+        generation !== formValidationGeneration.current ||
+        store.getErrorRevision() !== errorRevision ||
+        store.getInternalValues() !== currentValues ||
+        Array.from(controllers).some(
+          ([name, controller]) => !store.isValidationCurrent(name, controller)
+        )
+      ) {
+        return { isValid: false, values }
+      }
 
       const touchedPaths = touchFields
         ? Array.from(
             new Set<Path<Values>>([
-              ...validationTasks.map(({ name }) => name),
+              ...validationTaskList.map(({ name }) => name),
               ...(Object.keys(errors) as Path<Values>[]),
             ])
           )
@@ -336,11 +496,20 @@ export function useForm<Values extends object>(
         store.replaceErrors(errors, touchedPaths)
       })
 
-      return Object.keys(errors).length === 0
+      return { isValid: Object.keys(errors).length === 0, values }
+    } catch (error) {
+      endValidations(true)
+      throw error
     } finally {
       endValidations()
     }
   }, [runFieldValidation, validate, validateForm, store])
+
+  const validateFormFn = useCallback(
+    async (touchFields = false): Promise<boolean> =>
+      (await runFormValidation(touchFields)).isValid,
+    [runFormValidation]
+  )
 
   // Form submission handler
   const handleSubmit = useCallback(
@@ -351,11 +520,11 @@ export function useForm<Values extends object>(
       if (!submission) return
 
       try {
-        const isValid = await validateFormFn(true)
+        const { isValid, values } = await runFormValidation(true)
         if (!isValid || !onSubmit) return
 
         try {
-          await onSubmit(store.getValues())
+          await onSubmit(values)
         } catch (error) {
           if (onSubmitError) {
             onSubmitError(error)
@@ -367,7 +536,7 @@ export function useForm<Values extends object>(
         store.endSubmission(submission)
       }
     },
-    [validateFormFn, onSubmit, onSubmitError, store]
+    [runFormValidation, onSubmit, onSubmitError, store]
   )
 
   // Field operations
@@ -405,7 +574,9 @@ export function useForm<Values extends object>(
   )
 
   const getFieldState = useCallback(
-    <P extends Path<Values>>(name: P): FieldState<ValueAtPath<Values, P>> => {
+    <P extends Path<Values>>(
+      name: P
+    ): FieldState<DeepReadonly<ValueAtPath<Values, P>>> => {
       return store.getFieldState(name)
     },
     [store]
@@ -426,7 +597,9 @@ export function useForm<Values extends object>(
   const subscribe = useCallback(
     <P extends Path<Values>>(
       name: P,
-      callback: (state: FieldState<ValueAtPath<Values, P>>) => void
+      callback: (
+        state: FieldState<DeepReadonly<ValueAtPath<Values, P>>>
+      ) => void
     ) => {
       return store.subscribe(name, callback)
     },
@@ -445,10 +618,12 @@ export function useForm<Values extends object>(
           mode={props.mode ?? mode}
           reValidateMode={props.reValidateMode ?? reValidateMode}
           validateField={boundValidateField}
+          registerValidator={registerFieldValidator}
+          preserveValidateDuringStoreRender={storeRequestedOwnerRender.current}
         />
       )
     },
-    [store, mode, reValidateMode, boundValidateField]
+    [store, mode, reValidateMode, boundValidateField, registerFieldValidator]
   ) as <P extends Path<Values>>(props: FieldComponentProps<Values, P>) => ReactNode
 
   // FieldArray component (pre-bound to this form)
@@ -477,40 +652,40 @@ export function useForm<Values extends object>(
   return {
     // Form state is exposed through live getters. Reading a getter during
     // render subscribes the owner only to that state slice.
-    get values() {
-      observedSlices.add('values')
-      return store.getValues()
+    get values(): DeepReadonly<Values> {
+      renderObservedSlices.add('values')
+      return store.getValues() as DeepReadonly<Values>
     },
     get errors() {
-      observedSlices.add('errors')
+      renderObservedSlices.add('errors')
       return store.getErrors()
     },
     get touched() {
-      observedSlices.add('touched')
+      renderObservedSlices.add('touched')
       return store.getTouchedFields()
     },
     get isSubmitting() {
-      observedSlices.add('submission')
+      renderObservedSlices.add('submission')
       return store.isSubmitting()
     },
     get isSubmitted() {
-      observedSlices.add('submission')
+      renderObservedSlices.add('submission')
       return store.getSubmitCount() > 0
     },
     get isValid() {
-      observedSlices.add('valid')
+      renderObservedSlices.add('valid')
       return store.isValid()
     },
     get isDirty() {
-      observedSlices.add('dirty')
+      renderObservedSlices.add('dirty')
       return store.isDirty()
     },
     get isValidating() {
-      observedSlices.add('validating')
+      renderObservedSlices.add('validating')
       return store.isValidating()
     },
     get submitCount() {
-      observedSlices.add('submission')
+      renderObservedSlices.add('submission')
       return store.getSubmitCount()
     },
 

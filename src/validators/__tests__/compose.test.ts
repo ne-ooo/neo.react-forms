@@ -2,7 +2,7 @@
  * Validator composition tests
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   compose,
   optional,
@@ -40,6 +40,14 @@ describe('Validator Composition', () => {
       expect(await validator(-1)).toBe('Must be positive')
       expect(await validator(101)).toBe('Must be at most 100')
       expect(await validator(50)).toBeNull()
+    })
+
+    it('stops on an empty-string error', async () => {
+      const laterValidator = vi.fn(() => 'later error')
+      const validator = compose<string>([() => '', laterValidator])
+
+      expect(await validator('value')).toBe('')
+      expect(laterValidator).not.toHaveBeenCalled()
     })
 
     it('forwards validation context to each validator', async () => {

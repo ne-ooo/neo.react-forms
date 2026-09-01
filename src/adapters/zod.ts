@@ -24,7 +24,7 @@
  * ```
  */
 
-import type { Validator, ValidationSchema } from '../types.js'
+import type { DeepReadonly, Validator, ValidationSchema } from '../types.js'
 
 /**
  * Zod types (imported as type-only to avoid runtime dependency)
@@ -50,8 +50,8 @@ export type ZodInfer<T> = T extends { _output: infer Output extends object }
  * @returns Validator function
  */
 function createZodValidator<T>(schema: ZodTypeAny): Validator<T> {
-  return async (value: T) => {
-    const result = schema.safeParse(value)
+  return async (value: DeepReadonly<T>) => {
+    const result = await schema.safeParseAsync(value)
 
     if (!result.success) {
       // Return first error message

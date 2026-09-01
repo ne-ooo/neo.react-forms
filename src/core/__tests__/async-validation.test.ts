@@ -126,6 +126,55 @@ describe('FormStore - Async Validation State', () => {
 
       expect(store.isFieldValidating('username' as any)).toBe(false)
     })
+
+    it('disposes pending work without permanently disabling the store', () => {
+      const store = new FormStore<TestFormValues>({
+        username: '',
+        email: '',
+        age: 0,
+      })
+      let oldFieldNotifications = 0
+      let oldGlobalNotifications = 0
+      store.subscribe('username', () => {
+        oldFieldNotifications++
+      })
+      store.subscribeToStore(() => {
+        oldGlobalNotifications++
+      })
+      store.getFieldState('username')
+      const usernameController = store.startValidation('username')
+      const emailController = store.startValidation('email')
+      const submission = store.startSubmission()
+
+      store.dispose()
+
+      expect(usernameController.signal.aborted).toBe(true)
+      expect(emailController.signal.aborted).toBe(true)
+      expect(store.isValidating()).toBe(false)
+      expect(store.getValidatingFields()).toEqual([])
+      expect(store.isValidationCurrent('username', usernameController)).toBe(false)
+      expect(store.isSubmitting()).toBe(false)
+
+      const notificationsAtDispose = {
+        field: oldFieldNotifications,
+        global: oldGlobalNotifications,
+      }
+      store.endValidation('username', usernameController)
+      if (submission) store.endSubmission(submission)
+      store.setValue('username', 'after-dispose')
+      expect(oldFieldNotifications).toBe(notificationsAtDispose.field)
+      expect(oldGlobalNotifications).toBe(notificationsAtDispose.global)
+
+      // React StrictMode can clean up and subscribe again with the same store.
+      let freshNotifications = 0
+      store.subscribe('username', () => {
+        freshNotifications++
+      })
+      const freshController = store.startValidation('username')
+      expect(freshController.signal.aborted).toBe(false)
+      store.endValidation('username', freshController)
+      expect(freshNotifications).toBe(2)
+    })
   })
 
   describe('validation notifications', () => {

@@ -7,6 +7,25 @@ import { z } from 'zod'
 import { zodAdapter, zodForm } from '../zod.js'
 
 describe('zodAdapter', () => {
+  it('returns an empty schema when the runtime object has no shape', () => {
+    expect(zodAdapter({ shape: undefined } as any)).toEqual({})
+  })
+
+  it('uses a stable fallback when a failed parse has no issue message', async () => {
+    const validation = zodAdapter({
+      shape: {
+        value: {
+          _def: { typeName: 'Custom' },
+          safeParseAsync: async () => ({ success: false, error: { issues: [] } }),
+        },
+      },
+    } as any)
+
+    await expect((validation as any).value('invalid')).resolves.toBe(
+      'Validation failed'
+    )
+  })
+
   describe('basic validation', () => {
     it('should validate string fields', async () => {
       const schema = z.object({
@@ -74,6 +93,22 @@ describe('zodAdapter', () => {
       // Invalid URL
       const invalidResult = await validator('not-a-url')
       expect(invalidResult).toBe('Invalid URL')
+    })
+
+    it('supports asynchronous refinements', async () => {
+      const schema = z.object({
+        username: z.string().refine(
+          async (value) => value !== 'taken',
+          'Username is already taken'
+        ),
+      })
+      const validation = zodAdapter(schema)
+      const validator = validation.username as any
+
+      await expect(validator('available')).resolves.toBeNull()
+      await expect(validator('taken')).resolves.toBe(
+        'Username is already taken'
+      )
     })
   })
 

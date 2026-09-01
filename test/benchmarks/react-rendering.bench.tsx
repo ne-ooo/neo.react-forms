@@ -4,7 +4,7 @@
  * Compares rendering performance across libraries
  */
 
-import { describe } from 'vitest'
+import { describe, expect } from 'vitest'
 import { renderHook, act, cleanup } from '@testing-library/react'
 import { useForm as useNeoForm } from '../../src/hooks/useForm.js'
 import { useFormik as useFormikForm } from 'formik'
@@ -162,74 +162,200 @@ describe('React Rendering: Multiple Updates', () => {
 })
 
 describe('React Rendering: Validation Performance', () => {
-  const validate = (values: Record<string, string>) => {
-    const errors: Record<string, string> = {}
-    Object.keys(values).forEach((key) => {
-      if (!values[key]) {
-        errors[key] = 'Required'
-      }
-    })
-    return errors
+  const data = generateFormData(10)
+  let validateNeo: () => Promise<void> = async () => {}
+  let unmountNeo = (): void => {}
+  bench(
+    'neo.react-forms: Validate one field on change (10 fields)',
+    () => validateNeo(),
+    {
+      throws: true,
+      setup: async () => {
+        let invocations = 0
+        const mounted = renderHook(() =>
+          useNeoForm({
+            initialValues: data,
+            mode: 'onChange',
+            validate: {
+              field0: (value: string) => {
+                invocations++
+                return value ? undefined : 'Required'
+              },
+            },
+          })
+        )
+        unmountNeo = mounted.unmount
+        let usesEmptyValue = true
+        validateNeo = async () => {
+          const value = usesEmptyValue ? '' : 'value0'
+          usesEmptyValue = !usesEmptyValue
+          await act(async () => {
+            mounted.result.current.setFieldValue('field0', value)
+            while (mounted.result.current.isValidating) {
+              await Promise.resolve()
+            }
+          })
+        }
+
+        // Prove equivalent validation work before Tinybench times samples.
+        await validateNeo()
+        expect(invocations).toBe(1)
+      },
+      teardown: () => {
+        unmountNeo()
+        cleanup()
+      },
+    }
+  )
+
+  let validateFormik: () => Promise<void> = async () => {}
+  let unmountFormik = (): void => {}
+  bench(
+    'Formik: Validate one field on change (10 fields)',
+    () => validateFormik(),
+    {
+      throws: true,
+      setup: async () => {
+        let invocations = 0
+        const mounted = renderHook(() =>
+          useFormikForm({
+            initialValues: data,
+            onSubmit: () => {},
+            validateOnChange: true,
+          })
+        )
+        mounted.result.current.registerField('field0', {
+          validate: (value: string) => {
+            invocations++
+            return value ? undefined : 'Required'
+          },
+        })
+        unmountFormik = () => {
+          mounted.result.current.unregisterField('field0')
+          mounted.unmount()
+        }
+        let usesEmptyValue = true
+        validateFormik = async () => {
+          const value = usesEmptyValue ? '' : 'value0'
+          usesEmptyValue = !usesEmptyValue
+          await act(async () => {
+            await mounted.result.current.setFieldValue('field0', value)
+          })
+        }
+
+        await validateFormik()
+        expect(invocations).toBe(1)
+      },
+      teardown: () => {
+        unmountFormik()
+        cleanup()
+      },
+    }
+  )
+
+  let validateRHF: () => Promise<void> = async () => {}
+  let unmountRHF = (): void => {}
+  bench(
+    'React Hook Form: Validate one field on change (10 fields)',
+    () => validateRHF(),
+    {
+      throws: true,
+      setup: async () => {
+        let invocations = 0
+        const mounted = renderHook(() =>
+          useRHF({
+            defaultValues: data,
+            mode: 'onChange',
+          })
+        )
+        mounted.result.current.register('field0', {
+          validate: (value) => {
+            invocations++
+            return value ? true : 'Required'
+          },
+        })
+        unmountRHF = mounted.unmount
+        let usesEmptyValue = true
+        validateRHF = async () => {
+          const value = usesEmptyValue ? '' : 'value0'
+          usesEmptyValue = !usesEmptyValue
+          await act(async () => {
+            mounted.result.current.setValue('field0', value, {
+              shouldDirty: true,
+            })
+            await mounted.result.current.trigger('field0')
+          })
+        }
+
+        await validateRHF()
+        expect(invocations).toBe(1)
+      },
+      teardown: () => {
+        unmountRHF()
+        cleanup()
+      },
+    }
+  )
+})
+
+describe('React Rendering: Nested Field Validation Scaling', () => {
+  type NestedValues = {
+    users: Array<{
+      email: string
+      profile: { name: string }
+    }>
   }
 
-  bench('neo.react-forms: Validate 10 fields on change', () => {
-    const data = generateFormData(10)
-    const { result, unmount } = renderHook(() =>
-      useNeoForm({
-        initialValues: data,
-        validate: Object.keys(data).reduce((acc, key) => ({
-          ...acc,
-          [key]: (value: string) => (value ? undefined : 'Required'),
-        }), {}),
-      })
+  const sizes = [100, 1_000, 5_000, 10_000]
+
+  for (const size of sizes) {
+    let validateNestedField: () => Promise<void> = async () => {}
+    let unmount = (): void => {}
+    bench(
+      `neo.react-forms: Validate users.0.email in ${size} rows`,
+      () => validateNestedField(),
+      {
+        throws: true,
+        setup: async () => {
+          let invocations = 0
+          const initialValues: NestedValues = {
+            users: Array.from({ length: size }, (_, index) => ({
+              email: `user-${index}@example.com`,
+              profile: { name: `User ${index}` },
+            })),
+          }
+          const mounted = renderHook(() =>
+            useNeoForm({
+              initialValues,
+              validate: {
+                users: {
+                  email: (value: string) => {
+                    invocations++
+                    return value ? undefined : 'Required'
+                  },
+                },
+              },
+            })
+          )
+          unmount = mounted.unmount
+          validateNestedField = async () => {
+            await act(async () => {
+              await mounted.result.current.validateField('users.0.email')
+            })
+          }
+
+          // The validator intentionally reads only its scalar value. This
+          // untimed preflight proves each scale case runs one validator.
+          await validateNestedField()
+          expect(invocations).toBe(1)
+        },
+        teardown: () => {
+          unmount()
+          cleanup()
+        },
+      }
     )
-
-    try {
-      act(() => {
-        result.current.setFieldValue('field0', '')
-      })
-    } finally {
-      cleanup()
-    }
-  })
-
-  bench('Formik: Validate 10 fields on change', () => {
-    const data = generateFormData(10)
-    const { result, unmount } = renderHook(() =>
-      useFormikForm({
-        initialValues: data,
-        onSubmit: () => {},
-        validate,
-        validateOnChange: true,
-      })
-    )
-
-    try {
-      act(() => {
-        void result.current.setFieldValue('field0', '')
-      })
-    } finally {
-      cleanup()
-    }
-  })
-
-  bench('React Hook Form: Validate 10 fields on change', () => {
-    const data = generateFormData(10)
-    const { result, unmount } = renderHook(() =>
-      useRHF({
-        defaultValues: data,
-        mode: 'onChange',
-      })
-    )
-
-    try {
-      act(() => {
-        result.current.setValue('field0', '', { shouldValidate: true })
-      })
-    } finally {
-      cleanup()
-    }
-  })
+  }
 })
 
 describe('React Rendering: Form Reset', () => {

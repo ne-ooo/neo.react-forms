@@ -181,7 +181,7 @@ describe('findings 9-11 architecture regressions', () => {
           { nested: { value: 'safe' }, result: '' },
           {
             result: (values) => {
-              values.nested.value = 'mutated'
+              ;(values as { nested: { value: string } }).nested.value = 'mutated'
               return values.nested.value
             },
           }

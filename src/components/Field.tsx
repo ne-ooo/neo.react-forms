@@ -5,69 +5,53 @@
  * - Automatic field-level subscriptions (isolated re-renders)
  * - Render props pattern for full control
  * - Perfect TypeScript inference of field value type
- * - Uncontrolled mode by default (like RHF)
+ * - Controlled DOM bindings with typed parsers
  */
 
-import { useSyncExternalStore, useCallback, type ReactNode } from 'react'
-import type { FormStore } from '../core/store.js'
-import { createImmutableSnapshot } from '../utils/immutable.js'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
+import { getValueByPath, type FormStore } from '../core/store.js'
+import {
+  createCachedLazyImmutableSnapshot,
+  createLazyImmutableSnapshot,
+} from '../utils/immutable.js'
 import type {
   Path,
   ValueAtPath,
   FieldRenderProps,
   FieldProps as InputProps,
+  FieldComponentProps,
   FieldChangeEvent,
-  FieldInputType,
-  ValidationMode,
+  DeepReadonly,
   Validator,
 } from '../types.js'
 
-export interface FieldProps<Values extends object, P extends Path<Values>> {
-  /**
-   * Field name (type-safe path)
-   */
-  name: P
-
-  /**
-   * Form store instance
-   */
+export type FieldProps<
+  Values extends object,
+  P extends Path<Values>,
+> = FieldComponentProps<Values, P> & {
+  /** Form store instance. */
   store: FormStore<Values>
-
-  /**
-   * Render function with field state
-   */
-  children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => ReactNode
-
-  /**
-   * Validation mode
-   */
-  mode?: ValidationMode
-
-  /**
-   * Re-validation mode
-   */
-  reValidateMode?: ValidationMode
-
-  /**
-   * Validator function(s)
-   */
-  validate?: Validator<ValueAtPath<Values, P>, Values>
-
-  /**
-   * Built-in parser and value binding for the rendered control.
-   */
-  inputType?: FieldInputType
-
-  /**
-   * Custom DOM event parser.
-   */
-  parse?: (event: FieldChangeEvent) => ValueAtPath<Values, P>
 
   /**
    * Form-owned validation pipeline used by the bound Field component.
    * @internal
    */
   validateField?: <Q extends Path<Values>>(name: Q) => Promise<boolean>
+
+  /** Register a mounted field-level validator with the owning form. */
+  registerValidator?: <Q extends Path<Values>>(
+    name: Q,
+    validator: Validator<ValueAtPath<Values, Q>, Values>
+  ) => () => void
+
+  /** @internal Preserve inline validators during a rerender requested by the store. */
+  preserveValidateDuringStoreRender?: boolean
 }
 
 /**
@@ -95,27 +79,67 @@ export function Field<Values extends object, P extends Path<Values>>({
   inputType = 'text',
   parse,
   validateField,
+  registerValidator,
+  preserveValidateDuringStoreRender = false,
 }: FieldProps<Values, P>): ReactNode {
+  const ownedValidationControllers = useRef(new Set<AbortController>())
+  const validateRef = useRef(validate)
+  const committedValidateRef = useRef(validate)
+  const hasValidator = validate !== undefined
+
+  useEffect(() => {
+    const changed = committedValidateRef.current !== validate
+    committedValidateRef.current = validate
+    validateRef.current = validate
+    if (!changed || preserveValidateDuringStoreRender) return
+
+    for (const controller of ownedValidationControllers.current) {
+      controller.abort()
+    }
+    ownedValidationControllers.current.clear()
+    store.cancelValidation(name)
+  }, [name, preserveValidateDuringStoreRender, store, validate])
+
+  useEffect(() => {
+    if (!hasValidator || !registerValidator) return
+    return registerValidator(name, (value, values, context) =>
+      validateRef.current?.(value, values, context)
+    )
+  }, [hasValidator, name, registerValidator])
+
+  useEffect(() => {
+    const controllers = ownedValidationControllers.current
+    return () => {
+      for (const controller of controllers) {
+        controller.abort()
+        store.endValidation(name, controller)
+      }
+      controllers.clear()
+    }
+  }, [name, store])
+
   // Subscribe to field state changes (isolated re-renders!)
   // Adapt store subscription to useSyncExternalStore API
   const subscribe = useCallback(
     (callback: () => void) => {
-      // Store's subscribe passes field state, but useSyncExternalStore just needs a notify
-      return store.subscribe(name, () => callback())
+      return store.subscribeToField(name, callback)
     },
     [store, name]
   )
 
   const getSnapshot = useCallback(
-    () => store.getFieldState(name),
+    () => store.getInternalFieldState(name),
     [store, name]
   )
 
   const fieldState = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const exposedValue = createCachedLazyImmutableSnapshot(
+    fieldState.value
+  ) as DeepReadonly<ValueAtPath<Values, P>>
 
   // Run validation
   const runValidation = useCallback(
-    async (value: ValueAtPath<Values, P> = store.getValue(name)) => {
+    async () => {
       if (!validate && validateField) {
         return validateField(name)
       }
@@ -124,22 +148,32 @@ export function Field<Values extends object, P extends Path<Values>>({
         return true
       }
 
+      const sourceValues = store.getInternalValues()
       const controller = store.startValidation(name)
+      ownedValidationControllers.current.add(controller)
       try {
-        const readonlyValues = createImmutableSnapshot(store.getValues())
-        const error = await validate(value, readonlyValues as Values, {
+        const readonlyValues = createLazyImmutableSnapshot(sourceValues)
+        const value = getValueByPath(readonlyValues, name) as DeepReadonly<
+          ValueAtPath<Values, P>
+        >
+        const error = await validate(value, readonlyValues, {
           name,
           signal: controller.signal,
           values: readonlyValues,
         })
-        if (store.isValidationCurrent(name, controller)) {
-          store.setError(name, error ?? undefined)
+        const normalizedError = error ?? undefined
+        const current =
+          store.isValidationCurrent(name, controller) &&
+          store.getInternalValues() === sourceValues
+        if (current) {
+          store.setError(name, normalizedError)
         }
-        return !error
+        return current && normalizedError === undefined
       } catch (error) {
-        if (controller.signal.aborted) return true
+        if (controller.signal.aborted) return false
         throw error
       } finally {
+        ownedValidationControllers.current.delete(controller)
         store.endValidation(name, controller)
       }
     },
@@ -154,7 +188,7 @@ export function Field<Values extends object, P extends Path<Values>>({
 
       const activeMode = wasValidated ? reValidateMode : mode
       if (activeMode === 'onChange' || activeMode === 'all') {
-        void runValidation(value).catch(() => undefined)
+        void runValidation().catch(() => undefined)
       }
     },
     [store, name, mode, reValidateMode, runValidation]
@@ -230,15 +264,15 @@ export function Field<Values extends object, P extends Path<Values>>({
   }
 
   if (inputType === 'checkbox') {
-    props.checked = Boolean(fieldState.value)
+    props.checked = Boolean(exposedValue)
   } else if (inputType === 'select-multiple') {
-    props.value = fieldState.value as Exclude<
+    props.value = exposedValue as Exclude<
       InputProps<ValueAtPath<Values, P>>['value'],
       undefined
     >
     props.multiple = true
   } else if (inputType !== 'file') {
-    props.value = (fieldState.value ?? '') as Exclude<
+    props.value = (exposedValue ?? '') as Exclude<
       InputProps<ValueAtPath<Values, P>>['value'],
       undefined
     >
@@ -247,6 +281,7 @@ export function Field<Values extends object, P extends Path<Values>>({
   // Render props
   const renderProps: FieldRenderProps<ValueAtPath<Values, P>> = {
     ...fieldState,
+    value: exposedValue,
     props,
     setValue,
     setError,

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, expectTypeOf } from 'vitest'
-import type { Path, ValueAtPath } from '../types.js'
+import type { Path, Validator, ValueAtPath } from '../types.js'
 
 describe('Type Utilities', () => {
   describe('Path<T>', () => {
@@ -97,6 +97,22 @@ describe('Type Utilities', () => {
         | 'company.address.country.name'
       >()
     })
+
+    it('excludes reserved prototype-pollution path segments', () => {
+      type ReservedValues = {
+        safe: string
+        constructor: string
+        __proto__: string
+        nested: {
+          prototype: string
+          value: number
+        }
+      }
+
+      expectTypeOf<Path<ReservedValues>>().toEqualTypeOf<
+        'safe' | 'nested' | 'nested.value'
+      >()
+    })
   })
 
   describe('ValueAtPath<T, P>', () => {
@@ -165,6 +181,11 @@ describe('Type Utilities', () => {
   })
 
   describe('Type Safety', () => {
+    it('types validator values as deeply read-only', () => {
+      type Value = Parameters<Validator<{ name: string }>>[0]
+      expectTypeOf<Value>().toEqualTypeOf<{ readonly name: string }>()
+    })
+
     it('should enforce type-safe field access', () => {
       type FormValues = {
         username: string

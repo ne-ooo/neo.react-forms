@@ -4,7 +4,7 @@
  * Combine multiple validators together
  */
 
-import type { ValidationContext, Validator } from '../types.js'
+import type { DeepReadonly, ValidationContext, Validator } from '../types.js'
 
 /**
  * Compose multiple validators (runs all, returns first error)
@@ -23,10 +23,14 @@ import type { ValidationContext, Validator } from '../types.js'
  * ```
  */
 export function compose<T, Values = unknown>(validators: Validator<T, Values>[]): Validator<T, Values> {
-  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
+  return async (
+    value: DeepReadonly<T>,
+    values?: DeepReadonly<Values>,
+    context?: ValidationContext<Values>
+  ) => {
     for (const validator of validators) {
       const error = await validator(value, values, context)
-      if (error) {
+      if (error !== null && error !== undefined) {
         return error
       }
     }
@@ -49,14 +53,14 @@ export function compose<T, Values = unknown>(validators: Validator<T, Values>[])
  */
 export function optional<T, Values = unknown>(validator: Validator<T, Values>): Validator<T | null | undefined, Values> {
   return async (
-    value: T | null | undefined,
-    values?: Values,
+    value: DeepReadonly<T | null | undefined>,
+    values?: DeepReadonly<Values>,
     context?: ValidationContext<Values>
   ) => {
     if (value === null || value === undefined || value === '') {
       return null
     }
-    return validator(value as T, values, context)
+    return validator(value as DeepReadonly<T>, values, context)
   }
 }
 
@@ -79,13 +83,17 @@ export function optional<T, Values = unknown>(validator: Validator<T, Values>): 
  */
 export function when<T, Values = unknown>(
   condition: (
-    value: T,
-    values?: Values,
+    value: DeepReadonly<T>,
+    values?: DeepReadonly<Values>,
     context?: ValidationContext<Values>
   ) => boolean | Promise<boolean>,
   validator: Validator<T, Values>
 ): Validator<T, Values> {
-  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
+  return async (
+    value: DeepReadonly<T>,
+    values?: DeepReadonly<Values>,
+    context?: ValidationContext<Values>
+  ) => {
     if (await condition(value, values, context)) {
       return validator(value, values, context)
     }
@@ -131,13 +139,17 @@ export function custom<T, Values = unknown>(
  */
 export function test<T, Values = unknown>(
   test: (
-    value: T,
-    values?: Values,
+    value: DeepReadonly<T>,
+    values?: DeepReadonly<Values>,
     context?: ValidationContext<Values>
   ) => boolean | Promise<boolean>,
   message: string
 ): Validator<T, Values> {
-  return async (value: T, values?: Values, context?: ValidationContext<Values>) => {
+  return async (
+    value: DeepReadonly<T>,
+    values?: DeepReadonly<Values>,
+    context?: ValidationContext<Values>
+  ) => {
     const result = await test(value, values, context)
     return result ? null : message
   }
@@ -158,8 +170,8 @@ export function test<T, Values = unknown>(
  * ```
  */
 export function oneOf<T, Values = unknown>(values: T[], message?: string): Validator<T, Values> {
-  return (value: T) => {
-    if (!values.includes(value)) {
+  return (value: DeepReadonly<T>) => {
+    if (!(values as unknown[]).includes(value as unknown)) {
       return message || `Must be one of: ${values.join(', ')}`
     }
     return null
@@ -174,8 +186,8 @@ export function oneOf<T, Values = unknown>(values: T[], message?: string): Valid
  * @returns Validator function
  */
 export function notOneOf<T, Values = unknown>(values: T[], message?: string): Validator<T, Values> {
-  return (value: T) => {
-    if (values.includes(value)) {
+  return (value: DeepReadonly<T>) => {
+    if ((values as unknown[]).includes(value as unknown)) {
       return message || `Must not be one of: ${values.join(', ')}`
     }
     return null
@@ -197,8 +209,8 @@ export function notOneOf<T, Values = unknown>(values: T[], message?: string): Va
  * ```
  */
 export function equals<T, Values = unknown>(expected: T, message = 'Values must match'): Validator<T, Values> {
-  return (value: T) => {
-    if (value !== expected) {
+  return (value: DeepReadonly<T>) => {
+    if ((value as unknown) !== (expected as unknown)) {
       return message
     }
     return null
@@ -213,8 +225,8 @@ export function equals<T, Values = unknown>(expected: T, message = 'Values must 
  * @returns Validator function
  */
 export function notEquals<T, Values = unknown>(notExpected: T, message = 'Values must not match'): Validator<T, Values> {
-  return (value: T) => {
-    if (value === notExpected) {
+  return (value: DeepReadonly<T>) => {
+    if ((value as unknown) === (notExpected as unknown)) {
       return message
     }
     return null

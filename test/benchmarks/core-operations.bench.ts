@@ -123,6 +123,26 @@ describe('Core Operations: Subscription Performance', () => {
   })
 })
 
+describe('Core Operations: Array Metadata Remapping', () => {
+  for (const size of [1_000, 5_000]) {
+    bench(`neo.react-forms: Remove first of ${size} indexed fields`, () => {
+      const items = Array.from({ length: size }, (_, index) => ({
+        value: `item-${index}`,
+      }))
+      const store = new FormStore({ items })
+      const paths = items.map((_, index) => `items.${index}.value`)
+      const errors = Object.fromEntries(paths.map((path) => [path, 'Error']))
+      store.replaceErrors(errors as any, paths as any)
+
+      store.setArrayValue(
+        'items' as any,
+        items.slice(1),
+        Array.from({ length: size - 1 }, (_, index) => index + 1)
+      )
+    })
+  }
+})
+
 describe('Core Operations: Validation Performance', () => {
   bench('neo.react-forms: Validate single field', () => {
     const store = new FormStore({ email: 'test@example.com' })

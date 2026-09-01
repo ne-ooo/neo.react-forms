@@ -9,9 +9,17 @@
  * - Uncontrolled mode by default
  */
 
-import { useSyncExternalStore, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
 import type { FormStore } from '../core/store.js'
-import type { ArrayPath, ValueAtPath } from '../types.js'
+import { createCachedLazyImmutableSnapshot } from '../utils/immutable.js'
+import type { ArrayPath, DeepReadonly, ValueAtPath } from '../types.js'
 
 type ArrayElement<Value> = Value extends readonly (infer Item)[] ? Item : never
 
@@ -67,17 +75,17 @@ export interface FieldArrayItem<T> {
   /**
    * Stable key for React reconciliation
    */
-  key: string
+  readonly key: string
 
   /**
    * Item value
    */
-  value: T
+  readonly value: DeepReadonly<T>
 
   /**
    * Item index in array
    */
-  index: number
+  readonly index: number
 }
 
 /**
@@ -87,7 +95,7 @@ export interface FieldArrayRenderProps<T> {
   /**
    * Array items with stable keys
    */
-  fields: FieldArrayItem<T>[]
+  readonly fields: readonly FieldArrayItem<T>[]
 
   /**
    * Array operation helpers
@@ -155,66 +163,100 @@ export function FieldArray<Values extends object, P extends ArrayPath<Values>>({
 
   // Keys move with their logical item rather than remaining attached to an index.
   const keysRef = useRef<string[]>([])
+  const fieldsRef = useRef<readonly FieldArrayItem<ArrayItem>[]>([])
 
   // Subscribe to array field changes
   const subscribe = useCallback(
     (callback: () => void) => {
-      return store.subscribe(name, () => callback())
+      return store.subscribeToField(name, callback)
     },
     [store, name]
   )
 
   const getSnapshot = useCallback((): ArrayItem[] => {
-    const value = store.getFieldState(name).value as unknown
+    const value = store.getInternalFieldState(name).value as unknown
     return Array.isArray(value) ? value as ArrayItem[] : EMPTY_ARRAY
   }, [store, name])
 
   const arrayValue = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
-  while (keysRef.current.length < arrayValue.length) {
-    keysRef.current.push(generateKey())
-  }
-  if (keysRef.current.length > arrayValue.length) {
-    keysRef.current.length = arrayValue.length
-  }
-
   // Generate stable keys for array items
-  const fields: FieldArrayItem<ArrayItem>[] = useMemo(() => {
-    return arrayValue.map((value, index) => {
-      return {
-        key: keysRef.current[index] ?? generateKey(),
-        value,
-        index,
+  const rendered = useMemo(() => {
+    const previousByKey = new Map(fieldsRef.current.map((field) => [field.key, field]))
+    const nextKeys = arrayValue.map(
+      (_, index) => keysRef.current[index] ?? generateKey()
+    )
+    const nextFields = arrayValue.map((value, index) => {
+      const key = nextKeys[index]!
+      const exposedValue = createCachedLazyImmutableSnapshot(value)
+
+      const previous = previousByKey.get(key)
+      if (
+        previous &&
+        previous.index === index &&
+        Object.is(previous.value, exposedValue)
+      ) {
+        return previous
       }
+
+      return Object.freeze({
+        key,
+        value: exposedValue,
+        index,
+      })
     })
+    return { fields: Object.freeze(nextFields), keys: nextKeys }
   }, [arrayValue])
+  const fields = rendered.fields
+
+  useEffect(() => {
+    keysRef.current = rendered.keys
+    fieldsRef.current = rendered.fields
+  }, [rendered])
+
+  const synchronizeKeys = (length: number): void => {
+    while (keysRef.current.length < length) {
+      keysRef.current.push(generateKey())
+    }
+    if (keysRef.current.length > length) keysRef.current.length = length
+  }
 
   // Array operation helpers
   const helpers: FieldArrayHelpers<ArrayItem> = useMemo(
     () => ({
       append: (value: ArrayItem) => {
-        const newArray = [...arrayValue, value]
-        const newToOld = arrayValue.map((_, index) => index) as Array<number | undefined>
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
+        const newArray = [...currentArray, value]
+        const newToOld = currentArray.map((_, index) => index) as Array<number | undefined>
         newToOld.push(undefined)
         keysRef.current.push(generateKey())
         store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       prepend: (value: ArrayItem) => {
-        const newArray = [value, ...arrayValue]
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
+        const newArray = [value, ...currentArray]
         const newToOld = [
           undefined,
-          ...arrayValue.map((_, index) => index),
+          ...currentArray.map((_, index) => index),
         ]
         keysRef.current.unshift(generateKey())
         store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       insert: (index: number, value: ArrayItem) => {
-        const targetIndex = Math.max(0, Math.min(index, arrayValue.length))
-        const newArray = [...arrayValue]
+        if (!Number.isInteger(index)) return
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
+        const targetIndex = Math.max(0, Math.min(index, currentArray.length))
+        const newArray = [...currentArray]
         newArray.splice(targetIndex, 0, value)
-        const newToOld = arrayValue.map((_, oldIndex) => oldIndex) as Array<
+        const newToOld = currentArray.map((_, oldIndex) => oldIndex) as Array<
           number | undefined
         >
         newToOld.splice(targetIndex, 0, undefined)
@@ -223,10 +265,14 @@ export function FieldArray<Values extends object, P extends ArrayPath<Values>>({
       },
 
       remove: (index: number) => {
-        if (index < 0 || index >= arrayValue.length) return
-        const newArray = arrayValue.filter((_, i) => i !== index)
+        if (!Number.isInteger(index)) return
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
+        if (index < 0 || index >= currentArray.length) return
+        const newArray = currentArray.filter((_, i) => i !== index)
         const newToOld: number[] = []
-        for (let oldIndex = 0; oldIndex < arrayValue.length; oldIndex++) {
+        for (let oldIndex = 0; oldIndex < currentArray.length; oldIndex++) {
           if (oldIndex !== index) newToOld.push(oldIndex)
         }
         keysRef.current.splice(index, 1)
@@ -234,48 +280,52 @@ export function FieldArray<Values extends object, P extends ArrayPath<Values>>({
       },
 
       move: (fromIndex: number, toIndex: number) => {
+        if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
         if (
           fromIndex < 0 ||
-          fromIndex >= arrayValue.length ||
+          fromIndex >= currentArray.length ||
           toIndex < 0 ||
-          toIndex >= arrayValue.length ||
+          toIndex >= currentArray.length ||
           fromIndex === toIndex
         ) {
           return
         }
 
-        const newArray = [...arrayValue]
+        const newArray = [...currentArray]
         const [item] = newArray.splice(fromIndex, 1)
-        if (item !== undefined) {
-          newArray.splice(toIndex, 0, item)
-        }
-        const newToOld = arrayValue.map((_, oldIndex) => oldIndex)
+        newArray.splice(toIndex, 0, item as ArrayItem)
+        const newToOld = currentArray.map((_, oldIndex) => oldIndex)
         const [oldIndex] = newToOld.splice(fromIndex, 1)
         const [key] = keysRef.current.splice(fromIndex, 1)
-        if (oldIndex !== undefined) newToOld.splice(toIndex, 0, oldIndex)
-        if (key !== undefined) keysRef.current.splice(toIndex, 0, key)
+        newToOld.splice(toIndex, 0, oldIndex as number)
+        keysRef.current.splice(toIndex, 0, key ?? generateKey())
         store.setArrayValue(name, newArray as ValueAtPath<Values, P>, newToOld)
       },
 
       swap: (indexA: number, indexB: number) => {
+        if (!Number.isInteger(indexA) || !Number.isInteger(indexB)) return
+        const currentValue = store.getInternalValue(name) as unknown
+        const currentArray = Array.isArray(currentValue) ? currentValue as ArrayItem[] : EMPTY_ARRAY
+        synchronizeKeys(currentArray.length)
         if (
           indexA < 0 ||
-          indexA >= arrayValue.length ||
+          indexA >= currentArray.length ||
           indexB < 0 ||
-          indexB >= arrayValue.length ||
+          indexB >= currentArray.length ||
           indexA === indexB
         ) {
           return
         }
 
-        const newArray = [...arrayValue]
-        const temp = newArray[indexA]
-        const itemB = newArray[indexB]
-        if (temp !== undefined && itemB !== undefined) {
-          newArray[indexA] = itemB
-          newArray[indexB] = temp
-        }
-        const newToOld = arrayValue.map((_, oldIndex) => oldIndex)
+        const newArray = [...currentArray]
+        ;[newArray[indexA], newArray[indexB]] = [
+          newArray[indexB] as ArrayItem,
+          newArray[indexA] as ArrayItem,
+        ]
+        const newToOld = currentArray.map((_, oldIndex) => oldIndex)
         ;[newToOld[indexA], newToOld[indexB]] = [newToOld[indexB]!, newToOld[indexA]!]
         ;[keysRef.current[indexA], keysRef.current[indexB]] = [
           keysRef.current[indexB]!,
@@ -298,13 +348,13 @@ export function FieldArray<Values extends object, P extends ArrayPath<Values>>({
         store.setArrayValue(name, [] as ValueAtPath<Values, P>, [])
       },
     }),
-    [arrayValue, store, name]
+    [store, name]
   )
 
-  const renderProps: FieldArrayRenderProps<ArrayItem> = {
-    fields,
-    helpers,
-  }
+  const renderProps = useMemo<FieldArrayRenderProps<ArrayItem>>(
+    () => ({ fields, helpers }),
+    [fields, helpers]
+  )
 
   return children(renderProps)
 }

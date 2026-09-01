@@ -3,9 +3,17 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { FormStore } from '../../core/store.js'
 import { Field } from '../Field.js'
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 describe('Field', () => {
   describe('rendering', () => {
@@ -171,6 +179,25 @@ describe('Field', () => {
   })
 
   describe('validation', () => {
+    it('retains an empty-string error from a standalone validator', async () => {
+      const store = new FormStore({ email: '' })
+
+      render(
+        <Field name="email" store={store} validate={() => ''} mode="onBlur">
+          {(field) => <input data-testid="email" {...field.props} />}
+        </Field>
+      )
+
+      fireEvent.blur(screen.getByTestId('email'))
+
+      await waitFor(() => {
+        expect(Object.prototype.hasOwnProperty.call(store.getErrors(), 'email')).toBe(
+          true
+        )
+      })
+      expect(store.getError('email')).toBe('')
+    })
+
     it('should validate field on blur when mode is onBlur', async () => {
       const store = new FormStore({ email: '' })
       const validate = vi.fn((value: string) => (!value ? 'Required' : null))
@@ -250,6 +277,176 @@ describe('Field', () => {
       await waitFor(() => {
         expect(store.getError('username')).toBe('Username taken')
       })
+    })
+
+    it('does not publish an override result after the value snapshot changes', async () => {
+      const pending = deferred<string | null>()
+      const store = new FormStore({ email: 'old@example.com' })
+      let validation: (() => Promise<boolean>) | undefined
+
+      render(
+        <Field
+          name="email"
+          store={store}
+          validate={() => pending.promise}
+          reValidateMode="onBlur"
+        >
+          {(field) => {
+            validation = field.validate
+            return null
+          }}
+        </Field>
+      )
+
+      let validationPromise!: Promise<boolean>
+      act(() => {
+        validationPromise = validation!()
+      })
+      act(() => {
+        store.setValue('email', 'new@example.com')
+      })
+
+      await act(async () => {
+        pending.resolve('Error for old value')
+        expect(await validationPromise).toBe(false)
+      })
+      expect(store.getError('email')).toBeUndefined()
+    })
+
+    it('aborts a standalone Field validator when the field unmounts', async () => {
+      const pending = deferred<string | null>()
+      const store = new FormStore({ email: '' })
+      let signal: AbortSignal | undefined
+      let validation: (() => Promise<boolean>) | undefined
+
+      const rendered = render(
+        <Field
+          name="email"
+          store={store}
+          validate={(_value, _values, context) => {
+            signal = context?.signal
+            return pending.promise
+          }}
+        >
+          {(field) => {
+            validation = field.validate
+            return null
+          }}
+        </Field>
+      )
+
+      let validationPromise!: Promise<boolean>
+      act(() => {
+        validationPromise = validation!()
+      })
+      expect(signal?.aborted).toBe(false)
+
+      rendered.unmount()
+      expect(signal?.aborted).toBe(true)
+      expect(store.isValidating()).toBe(false)
+
+      pending.resolve('Late error')
+      expect(await validationPromise).toBe(false)
+      expect(store.getError('email')).toBeUndefined()
+    })
+
+    it('invalidates a standalone validator when its validate prop changes', async () => {
+      const first = deferred<string | null>()
+      const second = deferred<string | null>()
+      const store = new FormStore({ email: '' })
+      let validation!: () => Promise<boolean>
+      const firstValidator = () => first.promise
+      const secondValidator = () => second.promise
+      const renderField = (validate: () => Promise<string | null>) => (
+        <Field name="email" store={store} validate={validate}>
+          {(field) => {
+            validation = field.validate
+            return null
+          }}
+        </Field>
+      )
+
+      const rendered = render(renderField(firstValidator))
+      let firstRun!: Promise<boolean>
+      act(() => {
+        firstRun = validation()
+      })
+      rendered.rerender(renderField(secondValidator))
+
+      await act(async () => {
+        first.resolve('Obsolete error')
+        expect(await firstRun).toBe(false)
+      })
+      expect(store.getError('email')).toBeUndefined()
+
+      let secondRun!: Promise<boolean>
+      act(() => {
+        secondRun = validation()
+      })
+      await act(async () => {
+        second.resolve('Current error')
+        expect(await secondRun).toBe(false)
+      })
+      expect(store.getError('email')).toBe('Current error')
+    })
+
+    it('does not let a standalone result clear a newer field error', async () => {
+      const pending = deferred<string | null>()
+      const store = new FormStore({ email: '' })
+      let validation!: () => Promise<boolean>
+      let setError!: (error: string | undefined) => void
+
+      render(
+        <Field name="email" store={store} validate={() => pending.promise}>
+          {(field) => {
+            validation = field.validate
+            setError = field.setError
+            return null
+          }}
+        </Field>
+      )
+
+      let validationPromise!: Promise<boolean>
+      act(() => {
+        validationPromise = validation()
+      })
+      act(() => setError('Manual error'))
+      await act(async () => {
+        pending.resolve(null)
+        expect(await validationPromise).toBe(false)
+      })
+      expect(store.getError('email')).toBe('Manual error')
+    })
+
+    it('passes a detached target object to an override validator', async () => {
+      const store = new FormStore({ profile: { name: 'Ada' } })
+      const storedProfile = store.getValue('profile')
+      let receivedProfile: { name: string } | undefined
+      let validation!: () => Promise<boolean>
+
+      render(
+        <Field
+          name="profile"
+          store={store}
+          parse={() => ({ name: 'Parsed' })}
+          validate={(value) => {
+            receivedProfile = value
+            return undefined
+          }}
+        >
+          {(field) => {
+            validation = field.validate
+            return null
+          }}
+        </Field>
+      )
+
+      await act(async () => {
+        expect(await validation()).toBe(true)
+      })
+      expect(receivedProfile).toEqual({ name: 'Ada' })
+      expect(receivedProfile).not.toBe(storedProfile)
+      expect(store.getValue('profile')).toBe(storedProfile)
     })
   })
 
@@ -342,7 +539,9 @@ describe('Field', () => {
       const validate = vi.fn((_value, values, context) => {
         expect(context?.name).toBe('email')
         expect(context?.values).toBe(values)
-        expect(Object.isFrozen(context?.values.profile)).toBe(true)
+        expect(() => {
+          ;(context?.values.profile as { name: string }).name = 'Changed'
+        }).toThrow('Form snapshots are read-only')
         return undefined
       })
 

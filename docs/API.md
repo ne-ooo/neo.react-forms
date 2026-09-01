@@ -14,13 +14,8 @@ import { zodAdapter, zodForm } from '@lpm.dev/neo.react-forms/adapters'
 import { configureDebug } from '@lpm.dev/neo.react-forms/devtools'
 ```
 
-The root package also exports validators as a namespace.
-
-```ts
-import { validators } from '@lpm.dev/neo.react-forms'
-
-validators.required()
-```
+Optional validators, adapters, and developer tools are available only from their
+dedicated package subpaths. This keeps core imports small.
 
 ## `useForm`
 
@@ -36,28 +31,45 @@ function useForm<Values extends object>(
 
 ```ts
 interface UseFormOptions<Values extends object> {
-  initialValues: Values
+  initialValues: SupportedFormValues<Values>
   validate?: ValidationSchema<Values>
   validateForm?: FormValidator<Values>
-  onSubmit?: (values: Values) => void | Promise<void>
+  onSubmit?: (values: DeepReadonly<Values>) => void | Promise<void>
   onSubmitError?: (error: unknown) => void
   mode?: 'onBlur' | 'onChange' | 'onSubmit' | 'all'
   reValidateMode?: 'onBlur' | 'onChange' | 'onSubmit' | 'all'
   computed?: {
-    [K in keyof Values]?: (values: Values) => Values[K]
+    [K in keyof Values]?: (values: DeepReadonly<Values>) => Values[K]
   }
 }
 ```
 
 `mode` defaults to `onBlur`. `reValidateMode` defaults to `onChange`.
 
-Computed fields must use top-level keys. Do not create a computed-field cycle.
+Computed fields must use top-level keys. Their value argument is read-only. Do not
+create a computed-field cycle.
+
+Form values can contain arrays, plain objects, dates, regular expressions,
+errors, maps, sets, binary buffers, typed views, blobs, and files. Promises,
+weak collections, functions, and symbols are not supported.
+
+Create built-in values in the same JavaScript realm as the store. Subclasses of
+slot-backed built-ins, resizable or growable buffers, and `AggregateError`
+values are not supported. Error subclasses preserve their standard fields and
+enumerable own state.
+
+Treat typed views as binary values. Put metadata in a sibling field. Extended
+typed-view objects with custom properties are not supported by the form-value
+boundary.
+
+The package detaches all values at the public boundary. Therefore, a public
+value cannot change the live form state.
 
 ### Returned state and operations
 
 ```ts
 interface UseFormReturn<Values extends object> {
-  values: Values
+  values: DeepReadonly<Values>
   errors: Partial<Record<Path<Values>, string>>
   touched: Partial<Record<Path<Values>, boolean>>
   isValid: boolean
@@ -194,7 +206,17 @@ Field options are:
 - `reValidateMode`: A field-level revalidation mode.
 - `validate`: A field-level validator.
 
-The render function receives `props`. Spread these props on the input. It also receives field state and the `setValue`, `setError`, `setTouched`, and `validate` helpers.
+Built-in parsers are type checked against the field. A number input must store
+`number | undefined` because an empty input produces `undefined`. Checkbox, file,
+and multi-select parsers require compatible value types. Use `parse` for another
+conversion.
+
+A mounted field-level `validate` function overrides the form schema for that field.
+It runs during field validation, whole-form validation, and submission.
+
+The render function receives controlled `props`. Spread these props on the input.
+It also receives field state and the `setValue`, `setError`, `setTouched`, and
+`validate` helpers.
 
 ## `FieldArray`
 
@@ -252,8 +274,8 @@ import { compose, email, required } from '@lpm.dev/neo.react-forms/validators'
 
 ```ts
 type Validator<T, Values = unknown> = (
-  value: T,
-  values?: Values,
+  value: DeepReadonly<T>,
+  values?: DeepReadonly<Values>,
   context?: ValidationContext<Values>
 ) => string | null | undefined | Promise<string | null | undefined>
 
@@ -333,7 +355,7 @@ optional<T, Values>(
 when<T, Values>(
   condition: (
     value: T,
-    values?: Values,
+    values?: DeepReadonly<Values>,
     context?: ValidationContext<Values>
   ) => boolean | Promise<boolean>,
   validator: Validator<T, Values>
@@ -343,7 +365,7 @@ custom<T, Values>(validator: Validator<T, Values>): Validator<T, Values>
 test<T, Values>(
   predicate: (
     value: T,
-    values?: Values,
+    values?: DeepReadonly<Values>,
     context?: ValidationContext<Values>
   ) => boolean | Promise<boolean>,
   message: string
@@ -417,7 +439,8 @@ A string matches an exact path or its final field name. Use a regular expression
 
 Set `includeSensitiveValues: true` only when you accept the disclosure risk.
 
-Browser-global exposure needs explicit enablement. It is disabled in production by default.
+Browser-global exposure needs explicit enablement. Without the second opt-in, it
+is available only when `NODE_ENV` is `development` or `test`.
 
 ```ts
 const cleanup = exposeFormToWindow('signup', snapshot, {
@@ -427,7 +450,9 @@ const cleanup = exposeFormToWindow('signup', snapshot, {
 cleanup()
 ```
 
-Set `allowInProduction: true` only for an approved production diagnostic session.
+Set `allowInProduction: true` only for an approved diagnostic session outside
+development or test. This second opt-in is also required in browser builds that
+do not provide `process.env.NODE_ENV`.
 
 Debug value logs use the same default redaction rules.
 

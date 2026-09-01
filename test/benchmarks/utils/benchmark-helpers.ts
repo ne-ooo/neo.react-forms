@@ -3,16 +3,21 @@
  */
 
 import { performance } from 'node:perf_hooks'
-import { bench as vitestBench } from 'vitest'
+import { bench as vitestBench, type BenchOptions } from 'vitest'
 
 /**
  * Register a benchmark. The release gate uses one measured iteration to prove
  * that every benchmark can load and execute without turning CI timing into a
  * performance assertion.
  */
-export function benchmark(name: string, fn: () => void | Promise<void>): void {
+export function benchmark(
+  name: string,
+  fn: () => void | Promise<void>,
+  options: BenchOptions = {}
+): void {
   if (process.env.NEO_BENCHMARK_SMOKE === '1') {
     vitestBench(name, fn, {
+      ...options,
       iterations: 1,
       time: 1,
       warmupIterations: 0,
@@ -21,7 +26,7 @@ export function benchmark(name: string, fn: () => void | Promise<void>): void {
     return
   }
 
-  vitestBench(name, fn)
+  vitestBench(name, fn, options)
 }
 
 /**

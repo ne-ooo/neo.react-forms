@@ -11,6 +11,10 @@ import {
 } from '../error-messages.js'
 
 describe('enhanceErrorMessage', () => {
+  it('preserves an empty error message', () => {
+    expect(enhanceErrorMessage('')).toEqual({ message: '' })
+  })
+
   it('should enhance email error with suggestion', () => {
     const result = enhanceErrorMessage('Invalid email address')
 
@@ -76,6 +80,17 @@ describe('formatError', () => {
     const result = formatError(enhanced, 'full')
 
     expect(result).toBe('Test error. Suggestion: Test suggestion')
+  })
+
+  it('formats enhanced errors that do not have suggestions', () => {
+    const enhanced = createValidationError('Test error')
+
+    expect(formatError(enhanced, 'suggestion')).toBe('')
+    expect(formatError(enhanced, 'full')).toBe('Test error')
+  })
+
+  it('falls back to the message for an unknown runtime format', () => {
+    expect(formatError('Test error', 'unknown' as never)).toBe('Test error')
   })
 })
 

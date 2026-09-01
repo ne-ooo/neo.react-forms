@@ -33,8 +33,124 @@ type PathLeaf =
   | ArrayBufferView
   | Blob
   | File
+  | FileList
 
-type NestedPath<Key extends string, Value> = NonNullable<Value> extends readonly (
+type UnsupportedFormValue =
+  | symbol
+  | ((...args: never[]) => unknown)
+  | AggregateError
+  | Promise<unknown>
+  | WeakMap<object, unknown>
+  | WeakSet<object>
+
+type ExtraPropertyKeys<T, Base> = Exclude<keyof T, keyof Base>
+
+type ContainsUnsupportedExtraProperties<T, Base, Seen = never> = [
+  ExtraPropertyKeys<T, Base>,
+] extends [never]
+  ? false
+  : {
+      [Key in ExtraPropertyKeys<T, Base>]-?: Key extends keyof T
+        ? ContainsUnsupportedFormValue<T[Key], Seen | T>
+        : false
+    }[ExtraPropertyKeys<T, Base>]
+
+type HasExtraProperties<T, Base> = [ExtraPropertyKeys<T, Base>] extends [never]
+  ? false
+  : true
+
+type TypedArrayBase<T> = T extends Int8Array
+  ? Int8Array
+  : T extends Uint8Array
+    ? Uint8Array
+    : T extends Uint8ClampedArray
+      ? Uint8ClampedArray
+      : T extends Int16Array
+        ? Int16Array
+        : T extends Uint16Array
+          ? Uint16Array
+          : T extends Int32Array
+            ? Int32Array
+            : T extends Uint32Array
+              ? Uint32Array
+              : T extends Float32Array
+                ? Float32Array
+                : T extends Float64Array
+                  ? Float64Array
+                  : T extends BigInt64Array
+                    ? BigInt64Array
+                    : T extends BigUint64Array
+                      ? BigUint64Array
+                      : ArrayBufferView
+
+type ContainsUnsupportedFormValue<T, Seen = never> = 0 extends 1 & T
+  ? false
+  : T extends UnsupportedFormValue
+    ? true
+    : T extends Seen
+      ? false
+    : T extends Map<infer Key, infer Value>
+      ? | ContainsUnsupportedFormValue<Key, Seen | T>
+        | ContainsUnsupportedFormValue<Value, Seen | T>
+        | ContainsUnsupportedExtraProperties<T, Map<Key, Value>, Seen>
+      : T extends ReadonlyMap<infer Key, infer Value>
+        ? | ContainsUnsupportedFormValue<Key, Seen | T>
+          | ContainsUnsupportedFormValue<Value, Seen | T>
+          | ContainsUnsupportedExtraProperties<T, ReadonlyMap<Key, Value>, Seen>
+      : T extends Set<infer Item>
+        ? | ContainsUnsupportedFormValue<Item, Seen | T>
+          | ContainsUnsupportedExtraProperties<T, Set<Item>, Seen>
+      : T extends ReadonlySet<infer Item>
+        ? | ContainsUnsupportedFormValue<Item, Seen | T>
+          | ContainsUnsupportedExtraProperties<T, ReadonlySet<Item>, Seen>
+        : T extends (infer Item)[]
+          ? | ContainsUnsupportedFormValue<Item, Seen | T>
+            | ContainsUnsupportedExtraProperties<T, Array<Item>, Seen>
+          : T extends readonly (infer Item)[]
+            ? | ContainsUnsupportedFormValue<Item, Seen | T>
+              | ContainsUnsupportedExtraProperties<T, ReadonlyArray<Item>, Seen>
+            : T extends Date
+              ? ContainsUnsupportedExtraProperties<T, Date, Seen>
+              : T extends RegExp
+                ? ContainsUnsupportedExtraProperties<T, RegExp, Seen>
+                : T extends Error
+                  ? | ContainsUnsupportedFormValue<T['cause'], Seen | T>
+                    | ContainsUnsupportedExtraProperties<T, Error, Seen>
+                  : T extends ArrayBuffer
+                    ? ContainsUnsupportedExtraProperties<T, ArrayBuffer, Seen>
+                    : T extends ArrayBufferView
+                      ? HasExtraProperties<
+                          T,
+                          T extends DataView ? DataView : TypedArrayBase<T>
+                        >
+                      : T extends File
+                        ? ContainsUnsupportedExtraProperties<T, File, Seen>
+                        : T extends Blob
+                          ? ContainsUnsupportedExtraProperties<T, Blob, Seen>
+                          : T extends FileList
+                            ? ContainsUnsupportedExtraProperties<T, FileList, Seen>
+                            : T extends object
+                              ? {
+                                  [Key in keyof T]-?: ContainsUnsupportedFormValue<
+                                    T[Key],
+                                    Seen | T
+                                  >
+                                }[keyof T]
+                              : false
+
+/** Values accepted by the structured, detached form-state boundary. */
+export type SupportedFormValues<T> = true extends ContainsUnsupportedFormValue<T>
+  ? never
+  : T
+
+type PreviousPathDepth = [never, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+type ReservedPathSegment = '__proto__' | 'prototype' | 'constructor'
+
+type NestedPath<
+  Key extends string,
+  Value,
+  Depth extends number,
+> = NonNullable<Value> extends readonly (
   infer Item
 )[]
   ?
@@ -43,20 +159,27 @@ type NestedPath<Key extends string, Value> = NonNullable<Value> extends readonly
       | (NonNullable<Item> extends PathLeaf
           ? never
           : NonNullable<Item> extends object
-            ? `${Key}.${number}.${Path<NonNullable<Item>>}`
+            ? `${Key}.${number}.${Path<
+                NonNullable<Item>,
+                PreviousPathDepth[Depth]
+              >}`
             : never)
   : NonNullable<Value> extends PathLeaf
     ? Key
     : NonNullable<Value> extends object
-      ? Key | `${Key}.${Path<NonNullable<Value>>}`
+      ? Key | `${Key}.${Path<NonNullable<Value>, PreviousPathDepth[Depth]>}`
       : Key
 
-export type Path<T> = T extends PathLeaf
+export type Path<T, Depth extends number = 12> = Depth extends 0
+  ? never
+  : T extends PathLeaf
   ? never
   : T extends object
   ? {
       [K in keyof T]-?: K extends string
-        ? NestedPath<K, T[K]>
+        ? K extends ReservedPathSegment
+          ? never
+          : NestedPath<K, T[K], Depth>
         : never
     }[keyof T]
   : never
@@ -85,19 +208,122 @@ export type ValueAtPath<T, P extends string> = P extends `${infer K}.${infer Res
 /**
  * Recursively mark form values as read-only.
  */
+type DateMutationMethod =
+  | 'setDate'
+  | 'setFullYear'
+  | 'setHours'
+  | 'setMilliseconds'
+  | 'setMinutes'
+  | 'setMonth'
+  | 'setSeconds'
+  | 'setTime'
+  | 'setUTCDate'
+  | 'setUTCFullYear'
+  | 'setUTCHours'
+  | 'setUTCMilliseconds'
+  | 'setUTCMinutes'
+  | 'setUTCMonth'
+  | 'setUTCSeconds'
+  | 'setYear'
+
+type DeepReadonlyDate = Omit<Date, DateMutationMethod>
+type DeepReadonlyRegExp = Omit<RegExp, 'compile' | 'lastIndex'> & {
+  readonly lastIndex: number
+}
+type ArrayBufferMutationMethod = 'resize' | 'transfer' | 'transferToFixedLength'
+type DeepReadonlyArrayBuffer = Omit<ArrayBuffer, ArrayBufferMutationMethod>
+type DeepReadonlySharedArrayBuffer = Omit<SharedArrayBuffer, 'grow'>
+type DeepReadonlyArrayBufferLike =
+  | DeepReadonlyArrayBuffer
+  | DeepReadonlySharedArrayBuffer
+type DataViewMutationMethod =
+  | 'setBigInt64'
+  | 'setBigUint64'
+  | 'setFloat16'
+  | 'setFloat32'
+  | 'setFloat64'
+  | 'setInt8'
+  | 'setInt16'
+  | 'setInt32'
+  | 'setUint8'
+  | 'setUint16'
+  | 'setUint32'
+type DeepReadonlyDataView = Omit<
+  DataView,
+  DataViewMutationMethod | 'buffer'
+> & {
+  readonly buffer: DeepReadonlyArrayBufferLike
+}
+type TypedArray =
+  | Int8Array
+  | Uint8Array
+  | Uint8ClampedArray
+  | Int16Array
+  | Uint16Array
+  | Int32Array
+  | Uint32Array
+  | Float32Array
+  | Float64Array
+  | BigInt64Array
+  | BigUint64Array
+type TypedArrayMutationMethod = 'copyWithin' | 'fill' | 'reverse' | 'set' | 'sort'
+type DeepReadonlyTypedArray<T extends TypedArray> = Omit<
+  T,
+  TypedArrayMutationMethod | 'buffer' | 'subarray' | number
+> & {
+  readonly [index: number]: T[number]
+  readonly buffer: DeepReadonlyArrayBufferLike
+  subarray(begin?: number, end?: number): DeepReadonlyTypedArray<T>
+}
+type DeepReadonlyExtras<T, Base> = {
+  readonly [Key in Exclude<keyof T, keyof Base>]: DeepReadonly<T[Key]>
+}
+
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
-  : T extends Date | RegExp | Error | Promise<unknown> | WeakMap<object, unknown> | WeakSet<object>
-    ? T
-    : T extends ReadonlyMap<infer Key, infer Value>
-      ? ReadonlyMap<DeepReadonly<Key>, DeepReadonly<Value>>
-      : T extends ReadonlySet<infer Item>
-        ? ReadonlySet<DeepReadonly<Item>>
-        : T extends readonly unknown[]
-          ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-          : T extends object
-            ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-            : T
+  : T extends Date
+    ? DeepReadonlyDate & DeepReadonlyExtras<T, Date>
+    : T extends RegExp
+      ? DeepReadonlyRegExp & DeepReadonlyExtras<T, RegExp>
+      : T extends DataView
+        ? DeepReadonlyDataView & DeepReadonlyExtras<T, DataView>
+        : T extends TypedArray
+          ? DeepReadonlyTypedArray<T> & DeepReadonlyExtras<T, TypedArray>
+          : T extends ArrayBuffer
+            ? DeepReadonlyArrayBuffer & DeepReadonlyExtras<T, ArrayBuffer>
+            : T extends SharedArrayBuffer
+              ? DeepReadonlySharedArrayBuffer &
+                  DeepReadonlyExtras<T, SharedArrayBuffer>
+      : T extends Error
+        ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+        : T extends Promise<infer Value>
+          ? Promise<DeepReadonly<Value>>
+          : T extends ReadonlyMap<infer Key, infer Value>
+            ? ReadonlyMap<DeepReadonly<Key>, DeepReadonly<Value>> &
+                DeepReadonlyExtras<
+                  T,
+                  T extends Map<Key, Value>
+                    ? Map<Key, Value>
+                    : ReadonlyMap<Key, Value>
+                >
+            : T extends ReadonlySet<infer Item>
+              ? ReadonlySet<DeepReadonly<Item>> &
+                  DeepReadonlyExtras<
+                    T,
+                    T extends Set<Item> ? Set<Item> : ReadonlySet<Item>
+                  >
+              : T extends WeakMap<infer Key, infer Value>
+                ? {
+                    get(key: Key): DeepReadonly<Value> | undefined
+                    has(key: Key): boolean
+                  }
+                : T extends WeakSet<infer Value>
+                  ? { has(value: Value): boolean }
+                  : T extends readonly unknown[]
+                    ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+                      : T extends object
+                        ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+                        : T
 
 type ArrayPathFor<T, P extends Path<T>> = P extends unknown
   ? NonNullable<ValueAtPath<T, P>> extends readonly unknown[]
@@ -122,8 +348,8 @@ export type ValidationMode = 'onBlur' | 'onChange' | 'onSubmit' | 'all'
  * Supports conditional validation via optional values parameter
  */
 export type Validator<T, Values = unknown> = (
-  value: T,
-  values?: Values,
+  value: DeepReadonly<T>,
+  values?: DeepReadonly<Values>,
   context?: ValidationContext<Values>
 ) => string | null | undefined | Promise<string | null | undefined>
 
@@ -140,7 +366,7 @@ export interface ValidationContext<Values = unknown> {
  * Form-level validation function
  */
 export type FormValidator<Values> = (
-  values: Values
+  values: DeepReadonly<Values>
 ) =>
   | Partial<Record<Path<Values>, string>>
   | null
@@ -188,7 +414,7 @@ export interface UseFormOptions<Values extends object> {
    * Initial values for the form
    * All types will be inferred from this!
    */
-  initialValues: Values
+  initialValues: SupportedFormValues<Values>
 
   /**
    * Validation schema (optional)
@@ -205,7 +431,7 @@ export interface UseFormOptions<Values extends object> {
   /**
    * Submit handler (optional)
    */
-  onSubmit?: (values: Values) => void | Promise<void>
+  onSubmit?: (values: DeepReadonly<Values>) => void | Promise<void>
 
   /**
    * Submit error handler (optional)
@@ -237,7 +463,7 @@ export interface UseFormOptions<Values extends object> {
    * ```
    */
   computed?: {
-    [K in keyof Values]?: (values: Values) => Values[K]
+    [K in keyof Values]?: (values: DeepReadonly<Values>) => Values[K]
   }
 }
 
@@ -248,33 +474,33 @@ export interface FieldState<T> {
   /**
    * Current field value
    */
-  value: T
+  readonly value: T
 
   /**
    * Field error message (if any)
    */
-  error: string | undefined
+  readonly error: string | undefined
 
   /**
    * Whether field has been touched (blurred)
    */
-  touched: boolean
+  readonly touched: boolean
 
   /**
    * Whether field value differs from initial value
    */
-  dirty: boolean
+  readonly dirty: boolean
 
   /**
    * Whether field is currently validating (async)
    */
-  isValidating: boolean
+  readonly isValidating: boolean
 }
 
 /**
  * State and operations returned by the bound useField hook.
  */
-export interface UseFieldReturn<T> extends FieldState<T> {
+export interface UseFieldReturn<T> extends FieldState<DeepReadonly<T>> {
   setValue: (value: T) => void
   setError: (error: string | undefined) => void
   setTouched: (touched: boolean) => void
@@ -292,7 +518,7 @@ export type FieldChangeEvent = ChangeEvent<
 
 export interface FieldProps<T> {
   name: string
-  value?: T extends string | number | readonly string[] ? T : never
+  value?: T extends string | number | readonly string[] ? DeepReadonly<T> : never
   checked?: boolean
   multiple?: boolean
   onChange: (e: FieldChangeEvent) => void
@@ -302,7 +528,7 @@ export interface FieldProps<T> {
 /**
  * Field render props
  */
-export interface FieldRenderProps<T> extends FieldState<T> {
+export interface FieldRenderProps<T> extends FieldState<DeepReadonly<T>> {
   /**
    * Props to spread on input element
    */
@@ -336,7 +562,7 @@ export interface FormState<Values extends object> {
   /**
    * Current form values (fully typed!)
    */
-  values: Values
+  values: DeepReadonly<Values>
 
   /**
    * Form errors
@@ -415,7 +641,9 @@ export interface FormOperations<Values extends object> {
   /**
    * Get field state
    */
-  getFieldState: <P extends Path<Values>>(name: P) => FieldState<ValueAtPath<Values, P>>
+  getFieldState: <P extends Path<Values>>(
+    name: P
+  ) => FieldState<DeepReadonly<ValueAtPath<Values, P>>>
 
   /**
    * Validate single field
@@ -447,7 +675,7 @@ export interface FormOperations<Values extends object> {
    */
   subscribe: <P extends Path<Values>>(
     name: P,
-    callback: (state: FieldState<ValueAtPath<Values, P>>) => void
+    callback: (state: FieldState<DeepReadonly<ValueAtPath<Values, P>>>) => void
   ) => () => void
 }
 
@@ -490,7 +718,7 @@ export interface UseFormReturn<Values extends object>
 /**
  * Field component props
  */
-export interface FieldComponentProps<Values extends object, P extends Path<Values>> {
+interface FieldComponentBaseProps<Values extends object, P extends Path<Values>> {
   /**
    * Field name (type-safe path)
    */
@@ -500,17 +728,6 @@ export interface FieldComponentProps<Values extends object, P extends Path<Value
    * Render function
    */
   children: (field: FieldRenderProps<ValueAtPath<Values, P>>) => ReactNode
-
-  /**
-   * How DOM input changes are converted to field values.
-   * @default 'text'
-   */
-  inputType?: FieldInputType
-
-  /**
-   * Override the built-in DOM value parser.
-   */
-  parse?: (event: FieldChangeEvent) => ValueAtPath<Values, P>
 
   /**
    * Override the form-level validation mode for this field.
@@ -526,12 +743,47 @@ export interface FieldComponentProps<Values extends object, P extends Path<Value
    * Override the form validation schema for this field.
    */
   validate?: Validator<ValueAtPath<Values, P>, Values>
-
-  /**
-   * Use controlled mode (default: false)
-   */
-  controlled?: boolean
 }
+
+type BuiltInFieldInputConfig<Value> =
+  | (string extends Value
+      ? { inputType?: 'text'; parse?: never }
+      : never)
+  | (number | undefined extends Value
+      ? { inputType: 'number'; parse?: never }
+      : never)
+  | (boolean extends Value
+      ? { inputType: 'checkbox'; parse?: never }
+      : never)
+  | (FileList | null extends Value
+      ? { inputType: 'file'; parse?: never }
+      : never)
+  | (string[] extends Value
+      ? { inputType: 'select-multiple'; parse?: never }
+      : never)
+
+type FieldInputConfig<Value> =
+  | BuiltInFieldInputConfig<Value>
+  | {
+      /**
+       * Override the built-in DOM value parser.
+       */
+      parse: (event: FieldChangeEvent) => Value
+
+      /**
+       * The custom parser takes precedence over this parser hint.
+      */
+      inputType?: FieldInputType
+    }
+
+/**
+ * Field component props. Built-in input parsers are available only when their
+ * runtime output is assignable to the selected field value.
+ */
+export type FieldComponentProps<
+  Values extends object,
+  P extends Path<Values>,
+> = FieldComponentBaseProps<Values, P> & FieldInputConfig<ValueAtPath<Values, P>>
 
 /**
  * Field array item with stable key
@@ -540,17 +792,17 @@ export interface FieldArrayItem<T> {
   /**
    * Stable key for React reconciliation
    */
-  key: string
+  readonly key: string
 
   /**
    * Item value
    */
-  value: T
+  readonly value: DeepReadonly<T>
 
   /**
    * Item index in array
    */
-  index: number
+  readonly index: number
 }
 
 /**
@@ -605,7 +857,7 @@ export interface FieldArrayRenderProps<T> {
   /**
    * Array items with stable keys
    */
-  fields: FieldArrayItem<T>[]
+  readonly fields: readonly FieldArrayItem<T>[]
 
   /**
    * Array operation helpers

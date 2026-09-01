@@ -10,6 +10,8 @@ import {
   debugValidation,
   debugSubmission,
   debugFormCreated,
+  debugFormState,
+  debugStateUpdate,
   createFormId,
   createTimer,
 } from '../debug.js'
@@ -57,6 +59,20 @@ describe('configureDebug', () => {
 })
 
 describe('debug logging functions', () => {
+  it('uses console.log when no custom logger is configured', () => {
+    const consoleLogger = vi.spyOn(console, 'log').mockImplementation(() => {})
+    configureDebug({
+      enabled: true,
+      logger: undefined,
+      logValueChanges: true,
+    } as any)
+
+    debugValueChange('form-1', 'email', 'before', 'after')
+
+    expect(consoleLogger).toHaveBeenCalledOnce()
+    configureDebug({ enabled: false })
+  })
+
   it('should call custom logger for value changes', () => {
     const logger = vi.fn()
     configureDebug({ enabled: true, logger, logValueChanges: true })
@@ -122,6 +138,25 @@ describe('debug logging functions', () => {
     configureDebug({ enabled: false })
   })
 
+  it('handles successful validation without an error and its log toggle', () => {
+    const logger = vi.fn()
+    configureDebug({ enabled: true, logger, logValidation: false })
+    debugValidation('form-1', 'email', {
+      valid: true,
+      duration: 2,
+    })
+    expect(logger).not.toHaveBeenCalled()
+
+    configureDebug({ logValidation: true })
+    debugValidation('form-1', 'email', {
+      valid: true,
+      duration: 2,
+    })
+    expect(logger.mock.calls[0]?.[0]).toMatch(/✓.*email/)
+    expect(logger.mock.calls[0]).toHaveLength(1)
+    configureDebug({ enabled: false })
+  })
+
   it('should call custom logger for submissions', () => {
     const logger = vi.fn()
     configureDebug({ enabled: true, logger, logSubmissions: true })
@@ -133,6 +168,49 @@ describe('debug logging functions', () => {
 
     // Reset
     configureDebug({ enabled: false })
+  })
+
+  it('logs failed submissions with details and respects its log toggle', () => {
+    const logger = vi.fn()
+    configureDebug({ enabled: true, logger, logSubmissions: false })
+    debugSubmission('form-1', {
+      success: false,
+      duration: 4,
+      error: { apiToken: 'secret' },
+    })
+    expect(logger).not.toHaveBeenCalled()
+
+    configureDebug({ logSubmissions: true })
+    debugSubmission('form-1', {
+      success: false,
+      duration: 4,
+      error: { apiToken: 'secret' },
+    })
+    expect(logger.mock.calls[0]?.[0]).toMatch(/✗.*submitted/)
+    expect(logger.mock.calls[0]?.[1]).toEqual({
+      error: { apiToken: REDACTED_VALUE },
+    })
+    configureDebug({ enabled: false })
+  })
+
+  it('logs state and snapshot details only when their controls allow it', () => {
+    const logger = vi.fn()
+    configureDebug({ enabled: true, logger, logStateUpdates: false })
+    debugStateUpdate('form-1', 'email', { touched: true })
+    expect(logger).not.toHaveBeenCalled()
+
+    configureDebug({ logStateUpdates: true })
+    debugStateUpdate('form-1', 'email', { touched: true })
+    debugStateUpdate('form-1', 'password', { error: 'secret detail' })
+    debugFormState('form-1', { password: 'secret' })
+
+    expect(logger.mock.calls[0]?.[1]).toEqual({ touched: true })
+    expect(logger.mock.calls[1]?.[1]).toEqual({ error: REDACTED_VALUE })
+    expect(logger.mock.calls[2]?.[1]).toEqual({ password: REDACTED_VALUE })
+    configureDebug({ enabled: false })
+    debugFormState('form-1', { email: 'ignored' })
+    debugFormCreated('form-1', { email: 'ignored' })
+    expect(logger).toHaveBeenCalledTimes(3)
   })
 
   it('should call custom logger for form creation', () => {

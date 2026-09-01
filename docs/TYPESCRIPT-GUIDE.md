@@ -76,6 +76,9 @@ type ValuesPath = Path<Values>
 
 Built-in leaf values do not expose their prototype methods as form paths. For example, `profile.birthday.getTime` is not a valid path.
 
+The reserved segments `__proto__`, `prototype`, and `constructor` are not form
+paths. Store such data under a different field name.
+
 ### `ArrayPath<T>`
 
 `ArrayPath<T>` returns only paths that contain arrays.
@@ -114,7 +117,7 @@ const confirmPassword: Validator<string, FormValues> = (
 
 The validation context contains the field name, an `AbortSignal`, and a detached value snapshot. The snapshot has read-only properties.
 
-The legacy `values` argument references the same snapshot.
+The legacy `values` argument references the same `DeepReadonly` snapshot.
 
 ```ts
 const uniqueEmail: Validator<string> = async (value, _values, context) => {
@@ -164,6 +167,8 @@ The argument to `helpers.append` is a `Todo`. The compiler rejects another value
 ## Input value parsing
 
 Set `inputType` when a DOM input does not produce a string value.
+The selected parser must be compatible with the field type. A number input must
+allow `undefined` because clearing the DOM input stores `undefined`.
 
 ```tsx
 <form.Field name="age" inputType="number">

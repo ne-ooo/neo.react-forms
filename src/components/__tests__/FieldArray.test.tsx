@@ -4,15 +4,183 @@
  * Tests array operations and stable key generation
  */
 
+import { Suspense, memo, startTransition, useState } from 'react'
+import { act, render, waitFor } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
 import { FormStore } from '../../core/store.js'
+import {
+  FieldArray,
+  type FieldArrayItem,
+  type FieldArrayRenderProps,
+} from '../FieldArray.js'
 
 interface FormValues {
   items: string[]
   users: Array<{ name: string; age: number }>
 }
 
+function SuspendForever({ promise }: { promise: Promise<never> }): never {
+  throw promise
+}
+
 describe('FieldArray', () => {
+  describe('component rendering and helpers', () => {
+    it('preserves unchanged row and helper identities on a nested update', () => {
+      type Values = { users: Array<{ name: string }> }
+      const store = new FormStore<Values>({
+        users: Array.from({ length: 100 }, (_, index) => ({ name: `user-${index}` })),
+      })
+      const renderCounts = new Map<string, number>()
+      const Row = memo(function Row({
+        field,
+      }: {
+        field: FieldArrayItem<{ name: string }>
+      }) {
+        renderCounts.set(field.key, (renderCounts.get(field.key) ?? 0) + 1)
+        return <span>{field.value.name}</span>
+      })
+      let latest: FieldArrayRenderProps<{ name: string }> | undefined
+
+      render(
+        <FieldArray name="users" store={store}>
+          {(props) => {
+            latest = props
+            return props.fields.map((field) => <Row key={field.key} field={field} />)
+          }}
+        </FieldArray>
+      )
+
+      const initialFields = latest!.fields
+      const initialHelpers = latest!.helpers
+      const initialKeys = initialFields.map((field) => field.key)
+
+      expect(Reflect.set(initialFields[0]!, 'index', 99)).toBe(false)
+      expect(Reflect.set(initialFields[0]!, 'key', 'poisoned')).toBe(false)
+      expect(Reflect.set(initialFields, '0', initialFields[1])).toBe(false)
+
+      act(() => store.setValue('users.0.name', 'changed'))
+
+      expect(latest!.helpers).toBe(initialHelpers)
+      expect(latest!.fields[0]).not.toBe(initialFields[0])
+      for (let index = 1; index < initialFields.length; index++) {
+        expect(latest!.fields[index]).toBe(initialFields[index])
+      }
+      expect(renderCounts.get(initialKeys[0]!)).toBe(2)
+      for (const key of initialKeys.slice(1)) {
+        expect(renderCounts.get(key)).toBe(1)
+      }
+    })
+
+    it('uses current store values when a captured helper runs repeatedly', () => {
+      const store = new FormStore({ items: ['a'] })
+      let latest: FieldArrayRenderProps<string> | undefined
+      render(
+        <FieldArray name="items" store={store}>
+          {(props) => {
+            latest = props
+            return null
+          }}
+        </FieldArray>
+      )
+      const helpers = latest!.helpers
+
+      act(() => {
+        helpers.append('b')
+        helpers.append('c')
+      })
+
+      expect(store.getValue('items')).toEqual(['a', 'b', 'c'])
+      expect(latest!.helpers).toBe(helpers)
+    })
+
+    it('moves and swaps in-bounds undefined items', () => {
+      type Values = { items: Array<string | undefined> }
+      const store = new FormStore<Values>({ items: [undefined, 'b', 'c'] })
+      let latest: FieldArrayRenderProps<string | undefined> | undefined
+      render(
+        <FieldArray name="items" store={store}>
+          {(props) => {
+            latest = props
+            return null
+          }}
+        </FieldArray>
+      )
+
+      act(() => latest!.helpers.move(0, 2))
+      expect(store.getValue('items')).toEqual(['b', 'c', undefined])
+
+      act(() => latest!.helpers.swap(0, 2))
+      expect(store.getValue('items')).toEqual([undefined, 'c', 'b'])
+    })
+
+    it('ignores non-integer operation indices', () => {
+      const store = new FormStore({ items: ['a', 'b', 'c'] })
+      let latest: FieldArrayRenderProps<string> | undefined
+      let notifications = 0
+      store.subscribe('items', () => {
+        notifications++
+      })
+      render(
+        <FieldArray name="items" store={store}>
+          {(props) => {
+            latest = props
+            return null
+          }}
+        </FieldArray>
+      )
+
+      act(() => {
+        latest!.helpers.insert(0.5, 'x')
+        latest!.helpers.remove(Number.NaN)
+        latest!.helpers.move(0, 1.5)
+        latest!.helpers.swap(0, Number.POSITIVE_INFINITY)
+      })
+
+      expect(store.getValue('items')).toEqual(['a', 'b', 'c'])
+      expect(notifications).toBe(0)
+    })
+
+    it('does not publish row-key changes from a suspended render', async () => {
+      const committedStore = new FormStore({ items: ['a', 'b', 'c'] })
+      const speculativeStore = new FormStore({ items: ['a'] })
+      const never = new Promise<never>(() => undefined)
+      const renders: string[] = []
+      let setView!: (view: 'committed' | 'speculative' | 'restored') => void
+      let latestKeys: string[] = []
+
+      function TestArray() {
+        const [view, updateView] = useState<
+          'committed' | 'speculative' | 'restored'
+        >('committed')
+        setView = updateView
+        renders.push(view)
+        const store = view === 'speculative' ? speculativeStore : committedStore
+        return (
+          <Suspense fallback={null}>
+            <FieldArray name="items" store={store}>
+              {({ fields }) => {
+                latestKeys = fields.map((field) => field.key)
+                return null
+              }}
+            </FieldArray>
+            {view === 'speculative' ? <SuspendForever promise={never} /> : null}
+          </Suspense>
+        )
+      }
+
+      render(<TestArray />)
+      const committedKeys = [...latestKeys]
+
+      act(() => {
+        startTransition(() => setView('speculative'))
+      })
+      await waitFor(() => expect(renders).toContain('speculative'))
+      act(() => setView('restored'))
+
+      expect(latestKeys).toEqual(committedKeys)
+    })
+  })
+
   describe('array operations via store', () => {
     it('should handle array append operation', () => {
       const store = new FormStore<FormValues>({

@@ -11,6 +11,11 @@ import { benchmark as bench, generateFormData } from './utils/benchmark-helpers.
 
 describe('Release benchmark smoke gate', () => {
   const values = generateFormData(100)
+  const largeArrayStore = new FormStore({
+    items: Array.from({ length: 20_000 }, (_, index) => ({ value: index })),
+  })
+  largeArrayStore.subscribeToField('items', () => {})
+  let nextLargeArrayValue = -1
 
   bench('create a 100-field store', () => {
     void new FormStore(values)
@@ -33,5 +38,9 @@ describe('Release benchmark smoke gate', () => {
         store.setValue(`field${index}`, `changed-${index}`)
       }
     })
+  })
+
+  bench('update one item under a 20k-item React field subscription', () => {
+    largeArrayStore.setValue('items.10000.value', nextLargeArrayValue--)
   })
 })

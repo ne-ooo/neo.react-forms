@@ -18,6 +18,7 @@ export type {
   ArrayPath,
   ValueAtPath,
   DeepReadonly,
+  SupportedFormValues,
   ValidationMode,
   ValidationContext,
   Validator,
@@ -56,11 +57,5 @@ export type {
 // Core store (advanced usage only)
 export { FormStore, getValueByPath, setValueByPath } from './core/store.js'
 
-// Tree-shakeable validators (import only what you need!)
-export * as validators from './validators/index.js'
-
-// Schema adapters (Zod, Yup, etc.)
-export { zodAdapter, zodForm, type ZodInfer } from './adapters/index.js'
-
-// Developer tools (debug, accessibility, error messages)
-export * as devtools from './devtools/index.js'
+// Validators, adapters, and developer tools use dedicated package subpaths so
+// importing the core form hook never retains those optional modules.

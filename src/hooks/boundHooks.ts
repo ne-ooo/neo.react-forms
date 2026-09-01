@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { FormStore } from '../core/store.js'
+import { createCachedLazyImmutableSnapshot } from '../utils/immutable.js'
 import type {
   DeepReadonly,
   FormState,
@@ -33,14 +34,17 @@ export function createBoundUseField<Values extends object>(
     name: P
   ): UseFieldReturn<ValueAtPath<Values, P>> {
     const subscribe = useCallback(
-      (callback: () => void) => store.subscribe(name, () => callback()),
+      (callback: () => void) => store.subscribeToField(name, callback),
       [name, store]
     )
     const getSnapshot = useCallback(
-      () => store.getFieldState(name),
+      () => store.getInternalFieldState(name),
       [name, store]
     )
     const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+    const exposedValue = createCachedLazyImmutableSnapshot(
+      state.value
+    ) as DeepReadonly<ValueAtPath<Values, P>>
 
     const setValue = useCallback(
       (value: ValueAtPath<Values, P>) => {
@@ -67,6 +71,7 @@ export function createBoundUseField<Values extends object>(
 
     return {
       ...state,
+      value: exposedValue,
       setValue,
       setError,
       setTouched,
